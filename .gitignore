@@ -1,0 +1,33 @@
+# Build outputs
+build/
+build_debug/
+build_relwithdebinfo/
+Testing/
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+CTestTestfile.cmake
+cmake_install.cmake
+Makefile
+
+# Compiled artifacts
+*.o
+*.o.d
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Runtime/debug outputs
+core
+core.*
+*.log
+
+# Editor/OS files
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
