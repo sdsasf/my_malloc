@@ -35,6 +35,9 @@ public:
     // Insert chunk in sorted order (largest first within bin)
     void free_sorted(Chunk* p) noexcept;
 
+    [[nodiscard]] bool contains(Chunk* p) noexcept;
+    bool unlink(Chunk* p) noexcept;
+
     // Alloc with split: carve nb from victim, remainder to unsorted bin
     [[nodiscard]] std::pair<Chunk*, Chunk*> alloc_split(
         ChunkSize nb, UnsortedBin& ub) noexcept;

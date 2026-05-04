@@ -31,6 +31,36 @@ public:
     [[nodiscard]] LargeBins&   large()   noexcept { return largebins_; }
     [[nodiscard]] UnsortedBin& unsorted() noexcept { return unsorted_; }
     [[nodiscard]] BinMap&      map()     noexcept { return binmap_; }
+
+    [[nodiscard]] bool contains_free_chunk(Chunk* p) noexcept {
+        if (!p || !p->is_valid()) return false;
+        if (unsorted_.contains(p)) return true;
+        if (in_smallbin_range(p->chunk_size())) {
+            return smallbins_.contains(smallbin_index(p->chunk_size()), p);
+        }
+        return largebins_.contains(p);
+    }
+
+    bool unlink_free_chunk(Chunk* p) noexcept {
+        if (!p || !p->is_valid() || !p->fd || !p->bk ||
+            p->fd->bk != p || p->bk->fd != p) {
+            return false;
+        }
+
+        if (unsorted_.contains(p)) {
+            unsorted_.unlink(p);
+            return true;
+        }
+
+        if (in_smallbin_range(p->chunk_size())) {
+            SmallbinIdx idx = smallbin_index(p->chunk_size());
+            if (!smallbins_.contains(idx, p)) return false;
+            smallbins_.unlink(idx, p);
+            return true;
+        }
+
+        return largebins_.unlink(p);
+    }
 };
 
 } // namespace my_ptmalloc

@@ -133,32 +133,33 @@ Tested on Linux x86_64, `-O2 -march=native`, on May 4, 2026. Each benchmark runs
 
 | Benchmark | glibc malloc | my_ptmalloc | Ratio |
 |-----------|-------------|-------------|-------|
-| Same-size 32B (10M alloc+free) | 51,121,748 | 79,833,874 | 1.56x |
-| Same-size 64B (10M alloc+free) | 53,963,170 | 77,130,109 | 1.43x |
-| Same-size 256B (10M alloc+free) | 26,201,865 | 44,036,547 | 1.68x |
-| Batch 512x1000 (512k alloc+free) | 15,784,022 | 31,899,157 | 2.02x |
-| Random alloc/free/realloc (200k) | 1,752,186 | 757,173 | 0.43x |
-| Large 8-128KB (30k alloc+free) | 113,651 | 82,094 | 0.72x |
-| Fragmentation (5k reallocs) | 22,836,264 | 582,909 | 0.03x |
-| Multi-thread 4x50k (200k total) | 2,971,304 | 4,397,584 | 1.48x |
+| Same-size 32B (10M alloc+free) | 74,037,422 | 54,417,130 | 0.73x |
+| Same-size 64B (10M alloc+free) | 59,666,379 | 60,552,607 | 1.01x |
+| Same-size 256B (10M alloc+free) | 35,982,169 | 30,009,090 | 0.83x |
+| Batch 512x1000 (512k alloc+free) | 21,266,321 | 27,883,891 | 1.31x |
+| Random alloc/free/realloc (200k) | 2,362,146 | 887,288 | 0.38x |
+| Large 8-128KB (30k alloc+free) | 152,627 | 103,324 | 0.68x |
+| Fragmentation (5k reallocs) | 41,166,834 | 3,004,867 | 0.07x |
+| Multi-thread 4x50k (200k total) | 4,075,257 | 2,038,841 | 0.50x |
 
 ### Memory Footprint (Peak RSS)
 
 | Benchmark | glibc malloc | my_ptmalloc | Overhead |
 |-----------|-------------|-------------|----------|
-| Random alloc/free | 16,896 KB | 25,216 KB | 1.5x |
-| Same-size / batch | 17,024 KB | 25,344 KB | 1.5x |
-| Large alloc | 20,128 KB | 89,344 KB | 4.4x |
-| Multi-thread | 101,120 KB | 179,712 KB | 1.8x |
+| Random alloc/free | 16,896 KB | 19,328 KB | 1.1x |
+| Same-size / batch | 16,896 KB | 19,456 KB | 1.2x |
+| Large alloc | 20,032 KB | 25,128 KB | 1.3x |
+| Fragmentation | 20,032 KB | 25,792 KB | 1.3x |
+| Multi-thread | 100,996 KB | 116,160 KB | 1.2x |
 
 ### Analysis
 
-- **Hot path (same-size)**: the lock-free tcache-before-arena path is now faster than glibc on these simple LIFO workloads.
-- **Batch operations**: batching benefits from tcache hits and avoiding the arena lock on cache hits.
-- **Random alloc/free/realloc**: still slower than glibc, mainly because realloc is conservative and the bin/coalescing policy is simpler.
-- **Large allocations**: still slower and heavier in RSS; the implementation uses fixed thresholds and less mature trimming/reuse.
-- **Multi-threaded**: now faster than glibc in this benchmark because threads are no longer pinned to `main_arena`, so arena lock contention drops sharply.
-- **Fragmentation microbench**: still much slower; this is the clearest remaining gap in coalescing, realloc growth, and trimming policy.
+- **Hot path (same-size)**: 64B is roughly at glibc parity in this run. 32B and 256B are slower than the previous run because the allocator now pays more correctness cost in shared bin/coalescing helpers.
+- **Batch operations**: still faster than glibc because most short-lived chunks stay in tcache.
+- **Random alloc/free/realloc**: still slower than glibc, but peak RSS improved after bin-aware coalescing and in-place realloc growth.
+- **Large allocations**: throughput is below glibc, but RSS overhead dropped sharply because top-merge trimming and better coalescing reduce retained heap memory.
+- **Multi-threaded**: lower than the previous benchmark run; arena distribution helps contention, but the benchmark still pays for simpler cross-thread arena reuse and coalescing policies.
+- **Fragmentation microbench**: improved from the previous documented 582,909 ops/sec and 89MB+ RSS to 3,004,867 ops/sec and 25,792KB peak RSS. It remains far behind glibc because realloc and trimming are still much simpler.
 
 ### Optimization Notes
 
@@ -168,6 +169,9 @@ This version implements the planned hot-path optimizations:
 - `ArenaManager::get_arena` creates/reuses per-thread arenas up to `ncpus * ARENA_MULTIPLIER`; non-main heap regions are `HEAP_MAX_SIZE` aligned so `HeapInfo::arena_for_chunk` can map frees back to owners.
 - `UnsortedBin::scan_and_sort` has a fixed scan budget, exact-match tcache refill, and avoids arbitrary first-fit splitting that caused fragmentation in random workloads.
 - `LargeBins` uses `BinMap::find_first_from` to skip empty large-bin ranges before walking a sorted list.
+- `BinManager::unlink_free_chunk` centralizes unlinking from unsorted, small, and large bins, so coalescing can safely merge chunks that have already been sorted out of unsorted.
+- `my_realloc` can now grow in place by absorbing the top chunk or the next linked free chunk, splitting any usable remainder back to unsorted.
+- Top-chunk merges call `systrim` using the configured threshold policy.
 - Debug validation and `fprintf` calls in hot code are behind `MY_PTMALLOC_ENABLE_DEBUG`.
 
 See [docs/allocator_design.md](docs/allocator_design.md) for a detailed implementation and design explanation.
@@ -259,11 +263,11 @@ Large bins now use binmap-assisted search over sorted fd/bk lists. This keeps th
 
 ## Limitations
 
-- `systrim` is implemented but not automatically triggered (requires explicit `mallopt` call)
+- `systrim` is triggered on top merges, but not yet on every possible heap-growth/free path
 - Thread-local tcache is flushed on thread exit, but cleanup is not automatically wired into the OS thread destructor path yet
 - No `malloc_info` / `malloc_stats` implementation
 - No `mallopt` hooks for all glibc tuning parameters
-- `realloc` does not yet grow in place by merging the next free chunk, which hurts the fragmentation benchmark
+- `realloc` can grow into the top chunk or next linked free chunk, but still lacks several glibc-grade cases such as mmap remap and broader shrink/split heuristics
 
 ## License
 

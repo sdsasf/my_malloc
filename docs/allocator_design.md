@@ -135,6 +135,7 @@ Important ownership rules:
 - `Arena` owns all non-tcache bin structures and must be locked before touching them.
 - `Chunk` objects are not separately allocated metadata; chunk headers live inside the managed heap.
 - Non-main arena chunks carry `NON_MAIN_ARENA`, and `my_free` uses `HeapInfo` to find the owning arena.
+- `BinManager::unlink_free_chunk` is the single slow-path unlink helper for chunks that may be in unsorted, small, or large bins.
 
 ## 4. Chunk Layout
 
@@ -279,7 +280,38 @@ flowchart TD
 
 Tcache chunks are treated as allocated from the arena coalescing perspective. That is why pushing a chunk to tcache does not immediately clear neighboring `PREV_INUSE` metadata.
 
-## 8. Bin Flow
+Forward and backward coalescing now use bin membership rather than assuming that every adjacent free chunk is still in unsorted. This matters because an earlier allocation may have scanned unsorted and moved the neighbor into a small or large bin. The free path asks `BinManager` to unlink the neighbor from the correct structure before merging.
+
+## 8. Realloc Growth Path
+
+```mermaid
+flowchart TD
+    Start["my_realloc(ptr, new_size)"]
+    Same{"old chunk already large enough?"}
+    Top{"next chunk is arena top<br/>and enough total space?"}
+    NextFree{"next physical chunk is linked<br/>in a free bin and enough?"}
+    Split["split remainder if >= MINSIZE<br/>push remainder to unsorted"]
+    InPlace["return same pointer"]
+    Fallback["malloc new chunk<br/>memcpy old bytes<br/>free old chunk"]
+
+    Start --> Same
+    Same -- yes --> InPlace
+    Same -- no --> Top
+    Top -- yes --> Split --> InPlace
+    Top -- no --> NextFree
+    NextFree -- yes --> Split --> InPlace
+    NextFree -- no --> Fallback
+```
+
+The previous implementation always used allocate-copy-free for growth. The current implementation first tries to grow in place:
+
+- absorb the arena top chunk when the allocation is adjacent to top;
+- unlink and absorb the next physical free chunk when it is in unsorted, small, or large bins;
+- split any remaining tail back into unsorted.
+
+This directly targets fragmentation-heavy realloc workloads because it avoids creating a new allocation and freeing the old one when neighboring space is already available.
+
+## 9. Bin Flow
 
 ```mermaid
 flowchart LR
@@ -311,7 +343,7 @@ The unsorted bin is intentionally a staging area, not a permanent store. On allo
 - non-matching chunks are moved to small or large bins;
 - arbitrary larger chunks are not split directly from unsorted, because that acts like first-fit and caused severe fragmentation in random workloads.
 
-## 9. Large Bin Search
+## 10. Large Bin Search
 
 ```mermaid
 flowchart TD
@@ -334,7 +366,7 @@ flowchart TD
 
 Large bins are sorted largest-to-smallest in insertion order, and allocation walks from the back to find the smallest chunk that can satisfy the request. The binmap avoids scanning empty large-bin ranges.
 
-## 10. What Comes From ptmalloc and What Is Custom
+## 11. What Comes From ptmalloc and What Is Custom
 
 | Area | ptmalloc-style design | Project-specific implementation |
 |---|---|---|
@@ -345,9 +377,10 @@ Large bins are sorted largest-to-smallest in insertion order, and allocation wal
 | Large bins | Best-fit by size range | Sorted lists plus `BinMap`, no active `fd_nextsize` chain |
 | Unsorted bin | Deferred sorting after free/coalesce | Bounded scan and exact-size tcache refill only |
 | Arenas | Per-thread arena assignment | `ArenaManager` create/reuse logic with `HeapInfo` owner lookup |
+| Realloc | Try to expand in place before moving | Grow into top or next linked free chunk, then split remainder |
 | Debug checks | Development diagnostics | Compiled out unless `MY_PTMALLOC_ENABLE_DEBUG=1` |
 
-## 11. Optimization Summary
+## 12. Optimization Summary
 
 ### Tcache Before Arena Lock
 
@@ -375,25 +408,37 @@ An attempted optimization filled tcache with unrelated unsorted chunks. It impro
 
 Large-bin allocation now skips empty ranges with `BinMap::find_first_from`, then performs best-fit inside the selected sorted list. This is safer than restoring `fd_nextsize` before all split/unlink/coalesce paths maintain it correctly.
 
+### Bin-aware Coalescing
+
+Coalescing no longer assumes adjacent free chunks are still in unsorted. `BinManager::unlink_free_chunk` checks unsorted, small, and large bins and updates large-bin binmaps when needed. This improves fragmentation behavior after unsorted chunks have already been sorted into their final bins.
+
+### In-place Realloc Growth
+
+`my_realloc` now tries to grow into the top chunk or the next linked free chunk before falling back to allocate-copy-free. This reduced the documented fragmentation benchmark RSS from the previous 89MB+ range to about 25MB in the current run.
+
+### Top-merge Trimming
+
+When free/coalescing merges a chunk into the arena top, the allocator now calls `systrim` with the configured threshold policy. This lowers retained RSS for workloads that create large top chunks.
+
 ### Hot-path Debug Gating
 
 Metadata validation and `fprintf` diagnostics are useful during allocator development but expensive in release builds. They are behind `MY_PTMALLOC_ENABLE_DEBUG`.
 
-## 12. Current Performance Shape
+## 13. Current Performance Shape
 
 Measured on Linux x86_64 with `-O2 -march=native` on May 4, 2026:
 
-- same-size tcache-heavy workloads are faster than glibc in this benchmark;
-- batch allocation/free is faster because most operations avoid arena locks;
-- multi-threaded throughput improves after enabling per-thread arenas;
+- 64B same-size allocation is roughly at glibc parity in the current run;
+- batch allocation/free remains faster because most operations avoid arena locks;
 - random alloc/free/realloc is still slower than glibc;
-- fragmentation-heavy realloc workloads remain the biggest gap;
-- large allocation RSS remains higher because trimming and adaptive thresholds are simpler.
+- fragmentation-heavy realloc workloads improved significantly but remain the biggest throughput gap;
+- large allocation RSS is much closer to glibc after top-merge trimming and better coalescing;
+- multi-threaded throughput still depends heavily on tcache hit rate, arena reuse, and cross-thread scheduling.
 
-## 13. Remaining Work
+## 14. Remaining Work
 
-- Implement in-place `realloc` growth by merging with the next free chunk.
-- Trigger `systrim` automatically after large frees or top growth.
+- Add more `realloc` cases: shrink splitting, mmap remap, and more aggressive next/top remainder handling.
+- Trigger `systrim` on more heap-growth/free paths, not only top merges.
 - Add automatic thread-exit tcache flushing.
 - Restore `fd_nextsize` only with complete tests for large-bin insertion, unlink, split, and coalescing.
 - Add targeted benchmarks for arena reuse, unsorted scan limits, and fragmentation.

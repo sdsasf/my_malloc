@@ -93,6 +93,28 @@ void LargeBins::free_sorted(Chunk* p) noexcept {
     p->bk_nextsize = nullptr;
 }
 
+bool LargeBins::contains(Chunk* p) noexcept {
+    LargebinIdx idx = largebin_index(p->chunk_size());
+    size_t offset = bin_offset(idx);
+    if (offset >= NUM_LARGE_BINS) offset = NUM_LARGE_BINS - 1;
+    return bins_[offset].contains(p);
+}
+
+bool LargeBins::unlink(Chunk* p) noexcept {
+    LargebinIdx idx = largebin_index(p->chunk_size());
+    size_t offset = bin_offset(idx);
+    if (offset >= NUM_LARGE_BINS) offset = NUM_LARGE_BINS - 1;
+
+    IntrusiveList& bin = bins_[offset];
+    if (!bin.contains(p)) return false;
+
+    bin.unlink(p);
+    if (bin.empty()) binmap_.clear(NSMALLBINS + 2 + offset);
+    p->fd_nextsize = nullptr;
+    p->bk_nextsize = nullptr;
+    return true;
+}
+
 std::pair<Chunk*, Chunk*> LargeBins::alloc_split(ChunkSize nb, UnsortedBin& ub) noexcept {
     Chunk* victim = alloc_bestfit(nb);
     if (!victim) return {nullptr, nullptr};

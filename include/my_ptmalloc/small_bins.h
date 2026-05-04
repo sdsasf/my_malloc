@@ -44,6 +44,14 @@ public:
         return !bins_[idx.value].empty();
     }
 
+    [[nodiscard]] bool contains(SmallbinIdx idx, Chunk* p) const noexcept {
+        return bins_[idx.value].contains(p);
+    }
+
+    void unlink(SmallbinIdx idx, Chunk* p) noexcept {
+        bins_[idx.value].unlink(p);
+    }
+
     // Get raw list for direct manipulation
     [[nodiscard]] IntrusiveList& get_bin(SmallbinIdx idx) noexcept {
         return bins_[idx.value];

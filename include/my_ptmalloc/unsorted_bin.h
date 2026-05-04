@@ -43,6 +43,14 @@ public:
         return bin_.empty();
     }
 
+    [[nodiscard]] bool contains(Chunk* p) const noexcept {
+        return bin_.contains(p);
+    }
+
+    void unlink(Chunk* p) noexcept {
+        bin_.unlink(p);
+    }
+
     // Scan unsorted bin: sort chunks into proper bins, return exact match if found
     // Also fills tcache during scan
     // Returns matching chunk or nullptr

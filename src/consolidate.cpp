@@ -14,6 +14,11 @@
 
 namespace my_ptmalloc {
 
+static bool chunk_is_free(Arena& arena, Chunk* p) noexcept {
+    if (!p || p == arena.top()) return false;
+    return arena.bins_.contains_free_chunk(p);
+}
+
 void malloc_consolidate(Arena& arena) noexcept {
     if (!arena.has_fastchunks()) return;
 
@@ -32,12 +37,10 @@ void malloc_consolidate(Arena& arena) noexcept {
 
         // Forward merge: if next chunk is free and in a bin
         Chunk* next = p->next_chunk();
-        if (!next->prev_inuse()) {
+        if (chunk_is_free(arena, next)) {
             size_t next_size = next->chunk_size().value;
-            if (next_size >= MINSIZE && (next_size & MALLOC_ALIGN_MASK) == 0 &&
-                next->fd && next->bk &&
-                next->fd->bk == next && next->bk->fd == next) {
-                arena.bins_.unsorted().list().unlink(next);
+            if (arena.bins_.unlink_free_chunk(next)) {
+                if (arena.last_remainder_ == next) arena.last_remainder_ = nullptr;
                 psize += next_size;
             } else {
                 p->clear_previnuse();
@@ -49,9 +52,8 @@ void malloc_consolidate(Arena& arena) noexcept {
             Chunk* prev = p->prev_chunk();
             size_t prev_size = prev->chunk_size().value;
             if (prev_size >= MINSIZE && (prev_size & MALLOC_ALIGN_MASK) == 0 &&
-                prev->fd && prev->bk &&
-                prev->fd->bk == prev && prev->bk->fd == prev) {
-                arena.bins_.unsorted().list().unlink(prev);
+                arena.bins_.unlink_free_chunk(prev)) {
+                if (arena.last_remainder_ == prev) arena.last_remainder_ = nullptr;
                 psize += prev_size;
                 p = prev;
             }

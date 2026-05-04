@@ -13,18 +13,21 @@
 
 namespace my_ptmalloc {
 
+static bool chunk_is_free(Arena& arena, Chunk* p) noexcept {
+    if (!p || p == arena.top()) return false;
+    return arena.bins_.contains_free_chunk(p);
+}
+
 static void consolidate_and_free(Arena& arena, Chunk* p) noexcept {
     size_t psize = p->chunk_size().value;
     ChunkFlag orig_flags = p->flags();  // Preserve NON_MAIN_ARENA and other flags
 
     // Forward merge: if next chunk is free
     Chunk* next = p->next_chunk();
-    if (!next->prev_inuse()) {
+    if (chunk_is_free(arena, next)) {
         size_t next_size = next->chunk_size().value;
-        if (next_size >= MINSIZE && (next_size & MALLOC_ALIGN_MASK) == 0 &&
-            next->fd && next->bk &&
-            next->fd->bk == next && next->bk->fd == next) {
-            arena.bins_.unsorted().list().unlink(next);
+        if (arena.bins_.unlink_free_chunk(next)) {
+            if (arena.last_remainder_ == next) arena.last_remainder_ = nullptr;
             psize += next_size;
         } else {
             // Inconsistent metadata: clear prev_inuse so future merges can repair
@@ -40,10 +43,8 @@ static void consolidate_and_free(Arena& arena, Chunk* p) noexcept {
             prev_sz <= p_addr) {
             Chunk* prev = reinterpret_cast<Chunk*>(p_addr - prev_sz);
             size_t prev_size = prev->chunk_size().value;
-            if (prev_size == prev_sz &&
-                prev->fd && prev->bk &&
-                prev->fd->bk == prev && prev->bk->fd == prev) {
-                arena.bins_.unsorted().list().unlink(prev);
+            if (prev_size == prev_sz && arena.bins_.unlink_free_chunk(prev)) {
+                if (arena.last_remainder_ == prev) arena.last_remainder_ = nullptr;
                 psize += prev_size;
                 p = prev;
                 orig_flags = p->flags();
@@ -58,6 +59,7 @@ static void consolidate_and_free(Arena& arena, Chunk* p) noexcept {
         psize += arena.top()->chunk_size().value;
         p->set_head(ChunkSize{psize}, orig_flags | ChunkFlag::PREV_INUSE);
         arena.set_top(p);
+        systrim(arena, DEFAULT_TOP_PAD);
         return;
     }
 

@@ -71,6 +71,14 @@ public:
         bk->fd = fd;
     }
 
+    [[nodiscard]] bool contains(Chunk* p) const noexcept {
+        const Chunk* sentinel = &sentinel_;
+        for (const Chunk* cur = sentinel_.fd; cur != sentinel; cur = cur->fd) {
+            if (cur == p) return true;
+        }
+        return false;
+    }
+
     // Get sentinel for raw access (used by bin_at macros for compatibility)
     [[nodiscard]] Chunk* sentinel() noexcept { return &sentinel_; }
     [[nodiscard]] const Chunk* sentinel() const noexcept { return &sentinel_; }
