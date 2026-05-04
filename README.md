@@ -4,7 +4,7 @@ A C++17 hybrid memory allocator. It keeps a ptmalloc-style arena/bin fallback fo
 
 ## Features
 
-- **Small-object slab path** -- normal allocations up to 1024 bytes use 64KB aligned slabs, 16-byte size classes, thread-local free lists, and lock-free slab lookup on free
+- **Small-object slab path** -- normal allocations up to 1024 bytes use 64KB aligned slabs, 16-byte size classes, thread-local free lists, central per-class batch refill/drain, and lock-free slab lookup on free
 - **Tcache** -- 76 thread-local cached bins (64 small + 12 large), 16 entries per bin, with safe-linking (XOR pointer mangling) and double-free detection
 - **Fastbins** -- 10 lock-free CAS bins for chunks up to 160 bytes
 - **Small bins** -- 64 exact-fit FIFO bins (16-byte granularity)
@@ -139,39 +139,39 @@ Tested on Linux x86_64, `-O2 -march=native`, on May 4, 2026. Each benchmark runs
 
 | Benchmark | glibc malloc | my_ptmalloc | Ratio |
 |-----------|-------------|-------------|-------|
-| Same-size 32B (10M alloc+free) | 57,726,379 | 56,747,690 | 0.98x |
-| Same-size 64B (10M alloc+free) | 53,566,698 | 49,217,121 | 0.92x |
-| Same-size 256B (10M alloc+free) | 32,401,000 | 32,762,444 | 1.01x |
-| Batch 512x1000 (512k alloc+free) | 19,908,208 | 27,993,653 | 1.41x |
-| Random alloc/free/realloc (200k) | 2,090,676 | 1,008,440 | 0.48x |
-| Large 8-128KB (30k alloc+free) | 132,207 | 167,473 | 1.27x |
-| Fragmentation (5k reallocs) | 38,809,330 | 6,368,729 | 0.16x |
-| Multi-thread 4x50k (200k total) | 2,540,130 | 1,589,237 | 0.63x |
+| Same-size 32B (10M alloc+free) | 57,442,425 | 52,016,334 | 0.91x |
+| Same-size 64B (10M alloc+free) | 50,515,605 | 48,998,999 | 0.97x |
+| Same-size 256B (10M alloc+free) | 21,731,226 | 32,412,009 | 1.49x |
+| Batch 512x1000 (512k alloc+free) | 15,013,529 | 31,124,535 | 2.07x |
+| Random alloc/free/realloc (200k) | 1,984,153 | 1,031,687 | 0.52x |
+| Large 8-128KB (30k alloc+free) | 108,285 | 222,857 | 2.06x |
+| Fragmentation (5k reallocs) | 21,488,740 | 9,328,898 | 0.43x |
+| Multi-thread 4x50k (200k total) | 1,907,424 | 2,614,695 | 1.37x |
 
 ### Memory Footprint (Peak RSS)
 
 | Benchmark | glibc malloc | my_ptmalloc | Overhead |
 |-----------|-------------|-------------|----------|
 | Random alloc/free | 16,896 KB | 23,040 KB | 1.4x |
-| Same-size / batch | 16,896 KB | 23,168 KB | 1.4x |
-| Large alloc | 20,024 KB | 23,168 KB | 1.2x |
-| Fragmentation | 20,024 KB | 24,064 KB | 1.2x |
-| Multi-thread | 101,016 KB | 126,208 KB | 1.2x |
+| Same-size / batch | 17,024 KB | 23,168 KB | 1.4x |
+| Large alloc | 20,156 KB | 23,168 KB | 1.1x |
+| Fragmentation | 20,156 KB | 24,064 KB | 1.2x |
+| Multi-thread | 101,148 KB | 117,888 KB | 1.2x |
 
 ### Analysis
 
-- **Small-object hot path**: the new slab path puts 32B/64B near glibc and 256B slightly ahead in this run while avoiding per-object chunk headers.
-- **Batch operations**: faster than glibc because repeated <=1024B allocations stay on thread-local slab lists.
+- **Small-object hot path**: 32B/64B are near glibc, and 256B is faster in this run while avoiding per-object chunk headers.
+- **Batch operations**: more than 2x glibc in this run because repeated <=1024B allocations stay on thread-local slab lists and refill/drain in batches through the central cache.
 - **Random alloc/free/realloc**: still slower than glibc, but improved over the previous ptmalloc-only path because many small allocations avoid arena/bin logic.
 - **Large allocations**: faster than glibc in this run, mainly due to earlier coalescing/trim work and less retained heap state.
-- **Multi-threaded**: still behind glibc. This first slab slice has per-thread lists but no central cache, remote-free batching, or span ownership policy yet.
-- **Fragmentation microbench**: improved again, from the previous documented 3,004,867 ops/sec to 6,368,729 ops/sec. It remains behind glibc because slab spans are not reclaimed and realloc policy is still simpler.
+- **Multi-threaded**: now faster than glibc in this run after central per-class batch refill/drain reduced per-thread slab isolation.
+- **Fragmentation microbench**: improved again, from the previous documented 6,368,729 ops/sec to 9,328,898 ops/sec. It remains behind glibc because slab spans are not reclaimed and realloc policy is still simpler.
 
 ### Optimization Notes
 
 This version implements the planned hot-path optimizations:
 
-- `my_malloc` first routes normal <=1024B allocations through a new slab allocator with 16-byte size classes and 64KB aligned slabs.
+- `my_malloc` first routes normal <=1024B allocations through a slab allocator with 16-byte size classes, 64KB aligned slabs, and per-class central batch refill/drain.
 - `my_malloc` tries tcache before calling `ArenaManager::get_arena`, so tcache hits avoid arena mutexes completely.
 - `ArenaManager::get_arena` creates/reuses per-thread arenas up to `ncpus * ARENA_MULTIPLIER`; non-main heap regions are `HEAP_MAX_SIZE` aligned so `HeapInfo::arena_for_chunk` can map frees back to owners.
 - `UnsortedBin::scan_and_sort` has a fixed scan budget, exact-match tcache refill, and avoids arbitrary first-fit splitting that caused fragmentation in random workloads.
@@ -180,6 +180,7 @@ This version implements the planned hot-path optimizations:
 - `my_realloc` can now grow in place by absorbing the top chunk or the next linked free chunk, splitting any usable remainder back to unsorted.
 - Top-chunk merges call `systrim` using the configured threshold policy.
 - Slab pointer lookup uses an immutable atomic table after slab registration, avoiding a global mutex on every small-object free.
+- Thread-local slab caches refill in batches from central lists and drain surplus objects back to central lists.
 - Debug validation and `fprintf` calls in hot code are behind `MY_PTMALLOC_ENABLE_DEBUG`.
 
 See [docs/allocator_design.md](docs/allocator_design.md) for a detailed implementation and design explanation.

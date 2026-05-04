@@ -17,6 +17,9 @@ constexpr size_t SLAB_ALIGNMENT = 64 * 1024;
 constexpr size_t SLAB_CLASS_STEP = 16;
 constexpr size_t SLAB_CLASSES = SLAB_MAX_ALLOC / SLAB_CLASS_STEP;
 constexpr size_t SLAB_TABLE_SIZE = 16384;
+constexpr size_t SLAB_REFILL_BATCH = 32;
+constexpr size_t SLAB_DRAIN_BATCH = 64;
+constexpr size_t SLAB_MAX_THREAD_CACHE = 128;
 constexpr uint64_t SLAB_MAGIC = 0x6d795f736c616231ULL; // "my_slab1"
 
 struct FreeObj {
@@ -36,11 +39,19 @@ struct SlabTableEntry {
     std::atomic<SlabHeader*> slab;
 };
 
+struct alignas(64) CentralClass {
+    pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    FreeObj* list = nullptr;
+    size_t count = 0;
+};
+
 thread_local FreeObj* tls_lists[SLAB_CLASSES]{};
+thread_local size_t tls_counts[SLAB_CLASSES]{};
 thread_local bool slab_bypass = false;
 
 pthread_mutex_t table_lock = PTHREAD_MUTEX_INITIALIZER;
 SlabTableEntry slab_table[SLAB_TABLE_SIZE]{};
+CentralClass central[SLAB_CLASSES]{};
 
 [[nodiscard]] inline size_t class_index(size_t size) noexcept {
     if (size == 0) size = 1;
@@ -57,6 +68,37 @@ SlabTableEntry slab_table[SLAB_TABLE_SIZE]{};
 
 [[nodiscard]] inline size_t table_index(void* base) noexcept {
     return (reinterpret_cast<uintptr_t>(base) >> 16) & (SLAB_TABLE_SIZE - 1);
+}
+
+void central_push_list(size_t idx, FreeObj* head, FreeObj* tail, size_t count) noexcept {
+    if (!head) return;
+    CentralClass& c = central[idx];
+    pthread_mutex_lock(&c.lock);
+    tail->next = c.list;
+    c.list = head;
+    c.count += count;
+    pthread_mutex_unlock(&c.lock);
+}
+
+[[nodiscard]] FreeObj* central_take_batch(size_t idx, size_t max_count, size_t& out_count) noexcept {
+    out_count = 0;
+    CentralClass& c = central[idx];
+    pthread_mutex_lock(&c.lock);
+    FreeObj* head = c.list;
+    FreeObj* cur = head;
+    FreeObj* tail = nullptr;
+    while (cur && out_count < max_count) {
+        tail = cur;
+        cur = cur->next;
+        out_count++;
+    }
+    if (tail) {
+        c.list = cur;
+        tail->next = nullptr;
+        c.count -= out_count;
+    }
+    pthread_mutex_unlock(&c.lock);
+    return head;
 }
 
 void table_insert(void* base, SlabHeader* slab) noexcept {
@@ -91,11 +133,11 @@ void table_insert(void* base, SlabHeader* slab) noexcept {
     return result;
 }
 
-[[nodiscard]] SlabHeader* allocate_slab(size_t idx) noexcept {
+[[nodiscard]] bool allocate_slab(size_t idx) noexcept {
     size_t map_size = SLAB_ALIGNMENT * 2;
     void* raw = ::mmap(nullptr, map_size, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (raw == MAP_FAILED) return nullptr;
+    if (raw == MAP_FAILED) return false;
 
     uintptr_t raw_addr = reinterpret_cast<uintptr_t>(raw);
     uintptr_t aligned = (raw_addr + SLAB_ALIGNMENT - 1) & ~(SLAB_ALIGNMENT - 1);
@@ -116,15 +158,21 @@ void table_insert(void* base, SlabHeader* slab) noexcept {
     slab->object_count = static_cast<uint32_t>(usable / slab->object_size);
 
     FreeObj* head = nullptr;
+    FreeObj* tail = nullptr;
     for (size_t i = 0; i < slab->object_count; ++i) {
         auto* obj = reinterpret_cast<FreeObj*>(start + i * slab->object_size);
-        obj->next = head;
-        head = obj;
+        obj->next = nullptr;
+        if (!head) {
+            head = tail = obj;
+        } else {
+            tail->next = obj;
+            tail = obj;
+        }
     }
-    tls_lists[idx] = head;
 
     table_insert(reinterpret_cast<void*>(aligned), slab);
-    return slab;
+    central_push_list(idx, head, tail, slab->object_count);
+    return true;
 }
 
 } // namespace
@@ -144,13 +192,39 @@ void* slab_malloc(size_t size) noexcept {
 
     FreeObj* head = tls_lists[idx];
     if (!head) {
-        if (!allocate_slab(idx)) return nullptr;
-        head = tls_lists[idx];
+        size_t count = 0;
+        head = central_take_batch(idx, SLAB_REFILL_BATCH, count);
+        if (!head) {
+            if (!allocate_slab(idx)) return nullptr;
+            head = central_take_batch(idx, SLAB_REFILL_BATCH, count);
+        }
+        tls_lists[idx] = head;
+        tls_counts[idx] = count;
         if (!head) return nullptr;
     }
 
     tls_lists[idx] = head->next;
+    tls_counts[idx]--;
     return head;
+}
+
+void slab_drain(size_t idx) noexcept {
+    FreeObj* head = tls_lists[idx];
+    if (!head) return;
+
+    FreeObj* drain_head = head;
+    FreeObj* drain_tail = nullptr;
+    size_t drain_count = 0;
+    while (head && drain_count < SLAB_DRAIN_BATCH) {
+        drain_tail = head;
+        head = drain_tail->next;
+        drain_count++;
+    }
+
+    tls_lists[idx] = head;
+    tls_counts[idx] -= drain_count;
+    drain_tail->next = nullptr;
+    central_push_list(idx, drain_head, drain_tail, drain_count);
 }
 
 bool slab_free(void* ptr) noexcept {
@@ -162,6 +236,10 @@ bool slab_free(void* ptr) noexcept {
     auto* obj = static_cast<FreeObj*>(ptr);
     obj->next = tls_lists[idx];
     tls_lists[idx] = obj;
+    tls_counts[idx]++;
+    if (tls_counts[idx] > SLAB_MAX_THREAD_CACHE) {
+        slab_drain(idx);
+    }
     return true;
 }
 

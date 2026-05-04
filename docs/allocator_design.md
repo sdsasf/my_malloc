@@ -27,6 +27,7 @@ The project deliberately differs from glibc in implementation style. Instead of 
 flowchart TB
     API["Public API<br/>my_malloc / my_free / my_realloc / hooks"]
     SLAB["Small Slab Allocator<br/><=1024B, 16B classes"]
+    CENTRAL["Central Slab Cache<br/>per-class batch lists"]
     SLOOK["Slab Lookup Table<br/>64KB base -> SlabHeader"]
     Init["Global Init<br/>ArenaManager + AllocPipeline"]
     TC["Thread-local Tcache<br/>76 bins, lock-free"]
@@ -43,6 +44,7 @@ flowchart TB
 
     API --> Init
     API --> SLAB
+    SLAB --> CENTRAL
     SLAB --> SLOOK
     API --> TC
     API --> AM
@@ -145,6 +147,14 @@ classDiagram
       next pointer when free
     }
 
+    class CentralClass {
+      pthread_mutex_t lock
+      FreeObj* list
+      size_t count
+      refill_batch()
+      drain_batch()
+    }
+
     ArenaManager "1" --> "many" Arena
     Arena --> BinManager
     BinManager --> FastBins
@@ -159,6 +169,7 @@ classDiagram
     HeapInfo --> Arena
     SlabLookupTable --> SlabHeader
     SlabHeader --> SmallObject
+    CentralClass --> SmallObject
 ```
 
 Important ownership rules:
@@ -197,7 +208,21 @@ slab = slab_lookup_table[base]
 
 The lookup table is populated under a mutex when a slab is created, but reads are lock-free atomic loads because entries are immutable after insertion. This avoids the global-lock-on-free problem that made the first slab version slower.
 
-Current limitation: slabs are not yet returned to the OS when empty. That is intentional for the first architecture slice; the next step is a central span cache/page heap.
+Each size class has a central list. Thread-local slab caches refill from central in batches and drain surplus objects back to central:
+
+```mermaid
+flowchart LR
+    T["Thread-local class list"]
+    C["CentralClass list<br/>one per size class"]
+    S["New slab<br/>64KB objects"]
+
+    T -- empty: take 32 --> C
+    C -- empty: allocate slab --> S
+    S -- publish all objects --> C
+    T -- too full: return 64 --> C
+```
+
+Current limitation: slabs are not yet returned to the OS when empty. The central list reduces per-thread isolation and improves multi-thread performance, but empty-span reclamation still needs a span/page-map layer.
 
 ## 5. Chunk Layout
 
@@ -524,14 +549,15 @@ Measured on Linux x86_64 with `-O2 -march=native` on May 4, 2026:
 - random alloc/free/realloc is still slower than glibc;
 - fragmentation-heavy realloc workloads improved again after the slab path but remain a throughput gap;
 - large allocation throughput is ahead in this run, with RSS close to glibc;
-- multi-threaded throughput is still behind because there is no central slab cache or remote-free batching yet.
+- multi-threaded throughput is ahead in this run after central slab refill/drain, but true remote-free ownership is still not implemented.
 
 ## 15. Remaining Work
 
-- Add a central slab/span cache so thread-local slab lists can refill and drain in batches.
+- Replace slab-header lookup with a real page map so every page maps directly to span metadata.
+- Add explicit `Span` metadata with owner, free count, page count, and state.
 - Track empty slabs and return them to the page heap or OS.
 - Add remote-free handling so cross-thread frees do not poison the freeing thread's local cache.
-- Replace the fixed slab lookup hash with a proper page map for O(1) span lookup without probing.
+- Move large allocations to a page heap/span allocator instead of the ptmalloc-style large/top path.
 - Add more `realloc` cases: shrink splitting, mmap remap, and more aggressive next/top remainder handling.
 - Trigger `systrim` on more heap-growth/free paths, not only top merges.
 - Add automatic thread-exit tcache flushing.
