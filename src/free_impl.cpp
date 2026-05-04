@@ -6,6 +6,7 @@
 #include "my_ptmalloc/thread_registry.h"
 #include "my_ptmalloc/tcache.h"
 #include "my_ptmalloc/observer.h"
+#include "my_ptmalloc/slab_allocator.h"
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/types.h"
 #include "my_ptmalloc/chunk.h"
@@ -87,6 +88,8 @@ static void consolidate_and_free(Arena& arena, Chunk* p) noexcept {
 
 void my_free(void* ptr) noexcept {
     if (!ptr) return;
+
+    if (slab_free(ptr)) return;
 
     Chunk* p = Chunk::from_user_ptr(ptr);
     size_t chunk_size = p->chunk_size().value;

@@ -6,6 +6,7 @@
 #include "my_ptmalloc/chunk.h"
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/heap.h"
+#include "my_ptmalloc/slab_allocator.h"
 #include "my_ptmalloc/types.h"
 #include <cstring>
 
@@ -42,6 +43,16 @@ void* my_realloc(void* ptr, size_t size) noexcept {
     if (size == 0) {
         my_free(ptr);
         return nullptr;
+    }
+
+    size_t slab_usable = slab_usable_size(ptr);
+    if (slab_usable != 0) {
+        if (size <= slab_usable) return ptr;
+        void* new_ptr = my_malloc(size);
+        if (!new_ptr) return nullptr;
+        std::memcpy(new_ptr, ptr, slab_usable);
+        my_free(ptr);
+        return new_ptr;
     }
 
     Chunk* oldp = Chunk::from_user_ptr(ptr);

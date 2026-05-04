@@ -1,9 +1,10 @@
 # my_ptmalloc
 
-A C++17 reimplementation of glibc's ptmalloc2 memory allocator with tcache support. Drop-in replacement via `LD_PRELOAD` for benchmarking, educational inspection, and experimentation.
+A C++17 hybrid memory allocator. It keeps a ptmalloc-style arena/bin fallback for medium and large allocations, and adds a non-ptmalloc slab fast path for small objects. Drop-in replacement via `LD_PRELOAD` for benchmarking, educational inspection, and experimentation.
 
 ## Features
 
+- **Small-object slab path** -- normal allocations up to 1024 bytes use 64KB aligned slabs, 16-byte size classes, thread-local free lists, and lock-free slab lookup on free
 - **Tcache** -- 76 thread-local cached bins (64 small + 12 large), 16 entries per bin, with safe-linking (XOR pointer mangling) and double-free detection
 - **Fastbins** -- 10 lock-free CAS bins for chunks up to 160 bytes
 - **Small bins** -- 64 exact-fit FIFO bins (16-byte granularity)
@@ -24,7 +25,10 @@ A C++17 reimplementation of glibc's ptmalloc2 memory allocator with tcache suppo
 │                    Public API                        │
 │  my_malloc / my_free / my_calloc / my_realloc / ... │
 ├─────────────────────────────────────────────────────┤
-│                 Allocation Pipeline                  │
+│              Hybrid Allocation Front End             │
+│  Small Slab Path (<=1024B) OR ptmalloc-style path   │
+├─────────────────────────────────────────────────────┤
+│             ptmalloc-style Fallback Pipeline         │
 │  TcacheAlloc → FastbinAlloc → SmallbinAlloc →       │
 │  UnsortedAlloc → LargebinAlloc → TopChunkAlloc →    │
 │  SysAlloc (mmap/new_heap)                           │
@@ -46,20 +50,22 @@ A C++17 reimplementation of glibc's ptmalloc2 memory allocator with tcache suppo
 
 ### Allocation Flow
 
-1. **Tcache** -- thread-local, lock-free, O(1) for small sizes
-2. **Fastbins** -- global, CAS lock-free, O(1) for tiny sizes
-3. **Small bins** -- exact-fit FIFO under arena lock
-4. **Unsorted bin** -- bounded scan, exact matches can refill current tcache class, other chunks are sorted into bins
-5. **Large bins** -- binmap-assisted best-fit search in sorted bins
-6. **Top chunk** -- carve from arena's top chunk
-7. **System** -- `mmap` for large chunks, `new_heap` for arena growth
+1. **Slab fast path** -- normal allocations up to 1024 bytes use fixed-size slab objects and bypass chunk headers
+2. **Tcache fallback** -- thread-local, lock-free, O(1) for chunk-backed small sizes that bypass slab, such as aligned allocations
+3. **Fastbins** -- global, CAS lock-free, O(1) for tiny chunk-backed sizes
+4. **Small bins** -- exact-fit FIFO under arena lock
+5. **Unsorted bin** -- bounded scan, exact matches can refill current tcache class, other chunks are sorted into bins
+6. **Large bins** -- binmap-assisted best-fit search in sorted bins
+7. **Top chunk** -- carve from arena's top chunk
+8. **System** -- `mmap` for large chunks, `new_heap` for arena growth
 
 ### Deallocation Flow
 
-1. **Tcache** -- if in tcache range and not full, push to thread-local bin
-2. **Consolidation** -- merge with adjacent free chunks (forward + backward)
-3. **Top merge** -- if adjacent to top chunk, absorb into top
-4. **Unsorted bin** -- place consolidated chunk for deferred sorting
+1. **Slab pointer lookup** -- slab-backed small objects return to the current thread-local slab list
+2. **Tcache** -- if chunk-backed and in tcache range and not full, push to thread-local bin
+3. **Consolidation** -- merge chunk-backed allocations with adjacent free chunks
+4. **Top merge** -- if adjacent to top chunk, absorb into top
+5. **Unsorted bin** -- place consolidated chunk for deferred sorting
 
 ## Build
 
@@ -133,38 +139,39 @@ Tested on Linux x86_64, `-O2 -march=native`, on May 4, 2026. Each benchmark runs
 
 | Benchmark | glibc malloc | my_ptmalloc | Ratio |
 |-----------|-------------|-------------|-------|
-| Same-size 32B (10M alloc+free) | 74,037,422 | 54,417,130 | 0.73x |
-| Same-size 64B (10M alloc+free) | 59,666,379 | 60,552,607 | 1.01x |
-| Same-size 256B (10M alloc+free) | 35,982,169 | 30,009,090 | 0.83x |
-| Batch 512x1000 (512k alloc+free) | 21,266,321 | 27,883,891 | 1.31x |
-| Random alloc/free/realloc (200k) | 2,362,146 | 887,288 | 0.38x |
-| Large 8-128KB (30k alloc+free) | 152,627 | 103,324 | 0.68x |
-| Fragmentation (5k reallocs) | 41,166,834 | 3,004,867 | 0.07x |
-| Multi-thread 4x50k (200k total) | 4,075,257 | 2,038,841 | 0.50x |
+| Same-size 32B (10M alloc+free) | 57,726,379 | 56,747,690 | 0.98x |
+| Same-size 64B (10M alloc+free) | 53,566,698 | 49,217,121 | 0.92x |
+| Same-size 256B (10M alloc+free) | 32,401,000 | 32,762,444 | 1.01x |
+| Batch 512x1000 (512k alloc+free) | 19,908,208 | 27,993,653 | 1.41x |
+| Random alloc/free/realloc (200k) | 2,090,676 | 1,008,440 | 0.48x |
+| Large 8-128KB (30k alloc+free) | 132,207 | 167,473 | 1.27x |
+| Fragmentation (5k reallocs) | 38,809,330 | 6,368,729 | 0.16x |
+| Multi-thread 4x50k (200k total) | 2,540,130 | 1,589,237 | 0.63x |
 
 ### Memory Footprint (Peak RSS)
 
 | Benchmark | glibc malloc | my_ptmalloc | Overhead |
 |-----------|-------------|-------------|----------|
-| Random alloc/free | 16,896 KB | 19,328 KB | 1.1x |
-| Same-size / batch | 16,896 KB | 19,456 KB | 1.2x |
-| Large alloc | 20,032 KB | 25,128 KB | 1.3x |
-| Fragmentation | 20,032 KB | 25,792 KB | 1.3x |
-| Multi-thread | 100,996 KB | 116,160 KB | 1.2x |
+| Random alloc/free | 16,896 KB | 23,040 KB | 1.4x |
+| Same-size / batch | 16,896 KB | 23,168 KB | 1.4x |
+| Large alloc | 20,024 KB | 23,168 KB | 1.2x |
+| Fragmentation | 20,024 KB | 24,064 KB | 1.2x |
+| Multi-thread | 101,016 KB | 126,208 KB | 1.2x |
 
 ### Analysis
 
-- **Hot path (same-size)**: 64B is roughly at glibc parity in this run. 32B and 256B are slower than the previous run because the allocator now pays more correctness cost in shared bin/coalescing helpers.
-- **Batch operations**: still faster than glibc because most short-lived chunks stay in tcache.
-- **Random alloc/free/realloc**: still slower than glibc, but peak RSS improved after bin-aware coalescing and in-place realloc growth.
-- **Large allocations**: throughput is below glibc, but RSS overhead dropped sharply because top-merge trimming and better coalescing reduce retained heap memory.
-- **Multi-threaded**: lower than the previous benchmark run; arena distribution helps contention, but the benchmark still pays for simpler cross-thread arena reuse and coalescing policies.
-- **Fragmentation microbench**: improved from the previous documented 582,909 ops/sec and 89MB+ RSS to 3,004,867 ops/sec and 25,792KB peak RSS. It remains far behind glibc because realloc and trimming are still much simpler.
+- **Small-object hot path**: the new slab path puts 32B/64B near glibc and 256B slightly ahead in this run while avoiding per-object chunk headers.
+- **Batch operations**: faster than glibc because repeated <=1024B allocations stay on thread-local slab lists.
+- **Random alloc/free/realloc**: still slower than glibc, but improved over the previous ptmalloc-only path because many small allocations avoid arena/bin logic.
+- **Large allocations**: faster than glibc in this run, mainly due to earlier coalescing/trim work and less retained heap state.
+- **Multi-threaded**: still behind glibc. This first slab slice has per-thread lists but no central cache, remote-free batching, or span ownership policy yet.
+- **Fragmentation microbench**: improved again, from the previous documented 3,004,867 ops/sec to 6,368,729 ops/sec. It remains behind glibc because slab spans are not reclaimed and realloc policy is still simpler.
 
 ### Optimization Notes
 
 This version implements the planned hot-path optimizations:
 
+- `my_malloc` first routes normal <=1024B allocations through a new slab allocator with 16-byte size classes and 64KB aligned slabs.
 - `my_malloc` tries tcache before calling `ArenaManager::get_arena`, so tcache hits avoid arena mutexes completely.
 - `ArenaManager::get_arena` creates/reuses per-thread arenas up to `ncpus * ARENA_MULTIPLIER`; non-main heap regions are `HEAP_MAX_SIZE` aligned so `HeapInfo::arena_for_chunk` can map frees back to owners.
 - `UnsortedBin::scan_and_sort` has a fixed scan budget, exact-match tcache refill, and avoids arbitrary first-fit splitting that caused fragmentation in random workloads.
@@ -172,6 +179,7 @@ This version implements the planned hot-path optimizations:
 - `BinManager::unlink_free_chunk` centralizes unlinking from unsorted, small, and large bins, so coalescing can safely merge chunks that have already been sorted out of unsorted.
 - `my_realloc` can now grow in place by absorbing the top chunk or the next linked free chunk, splitting any usable remainder back to unsorted.
 - Top-chunk merges call `systrim` using the configured threshold policy.
+- Slab pointer lookup uses an immutable atomic table after slab registration, avoiding a global mutex on every small-object free.
 - Debug validation and `fprintf` calls in hot code are behind `MY_PTMALLOC_ENABLE_DEBUG`.
 
 See [docs/allocator_design.md](docs/allocator_design.md) for a detailed implementation and design explanation.

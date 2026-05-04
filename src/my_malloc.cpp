@@ -4,6 +4,7 @@
 #include "my_ptmalloc/arena.h"
 #include "my_ptmalloc/arena_manager.h"
 #include "my_ptmalloc/config.h"
+#include "my_ptmalloc/slab_allocator.h"
 #include <cstring>
 #include <new>
 
@@ -40,6 +41,7 @@ void* my_memalign(size_t alignment, size_t size) noexcept {
     if (alignment < MALLOC_ALIGNMENT) alignment = MALLOC_ALIGNMENT;
 
     size_t nb = request2size(UserSize{size}).value;
+    ScopedSlabBypass bypass;
 
     // Over-allocate so we can shift forward to the aligned position.
     // We need room for: nb usable bytes + up to (alignment - MALLOC_ALIGNMENT)
@@ -134,6 +136,8 @@ int my_mallopt(int param, int value) noexcept {
 
 size_t my_malloc_usable_size(void* ptr) noexcept {
     if (!ptr) return 0;
+    size_t slab_usable = slab_usable_size(ptr);
+    if (slab_usable != 0) return slab_usable;
     Chunk* p = Chunk::from_user_ptr(ptr);
     size_t cs = p->chunk_size().value;
     // Usable = chunk_size - SIZE_SZ (prev_size of next chunk is usable)

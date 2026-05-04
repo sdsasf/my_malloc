@@ -1,10 +1,15 @@
 # my_ptmalloc Allocator Design
 
-This document explains the current allocator architecture, the relationships between the major data structures, and the optimized allocation/free paths. It is written as a system design document rather than a line-by-line source tour.
+This document explains the current hybrid allocator architecture, the relationships between the major data structures, and the optimized allocation/free paths. It is written as a system design document rather than a line-by-line source tour.
 
 ## 1. Design Goals
 
-`my_ptmalloc` is a compact C++17 reimplementation of the main ptmalloc ideas used by glibc malloc:
+`my_ptmalloc` started as a compact C++17 reimplementation of the main ptmalloc ideas used by glibc malloc. It now uses a hybrid design:
+
+- normal small allocations up to 1024 bytes use a custom slab allocator;
+- medium, aligned, and large allocations use the existing ptmalloc-style arena/bin fallback.
+
+The ptmalloc-style fallback keeps:
 
 - chunk headers with boundary-tag metadata;
 - thread-local tcache;
@@ -14,13 +19,15 @@ This document explains the current allocator architecture, the relationships bet
 - direct mmap for large allocations;
 - `HeapInfo` ownership lookup for non-main arenas.
 
-The project deliberately differs from glibc in implementation style. Instead of one macro-heavy `malloc.c`, it uses small C++ classes: `ArenaManager`, `Arena`, `BinManager`, `TcachePerthread`, `FastBins`, `SmallBins`, `LargeBins`, and `UnsortedBin`.
+The project deliberately differs from glibc in implementation style. Instead of one macro-heavy `malloc.c`, it uses small C++ classes and POD metadata: `SlabHeader`, `ArenaManager`, `Arena`, `BinManager`, `TcachePerthread`, `FastBins`, `SmallBins`, `LargeBins`, and `UnsortedBin`.
 
 ## 2. System Overview
 
 ```mermaid
 flowchart TB
     API["Public API<br/>my_malloc / my_free / my_realloc / hooks"]
+    SLAB["Small Slab Allocator<br/><=1024B, 16B classes"]
+    SLOOK["Slab Lookup Table<br/>64KB base -> SlabHeader"]
     Init["Global Init<br/>ArenaManager + AllocPipeline"]
     TC["Thread-local Tcache<br/>76 bins, lock-free"]
     AM["ArenaManager<br/>arena creation / reuse / selection"]
@@ -35,6 +42,8 @@ flowchart TB
     HI["HeapInfo<br/>non-main arena owner lookup"]
 
     API --> Init
+    API --> SLAB
+    SLAB --> SLOOK
     API --> TC
     API --> AM
     AM --> AR
@@ -49,12 +58,13 @@ flowchart TB
     HI --> AR
 ```
 
-The intended hot path is:
+The intended hot paths are:
 
-1. Try tcache without locking.
-2. Only on tcache miss, select and lock an arena.
-3. Search arena-local structures from cheapest to most expensive.
-4. Grow the heap or mmap only if all reusable structures miss.
+1. For normal `<=1024B` allocations, use the slab allocator and avoid chunk headers entirely.
+2. For chunk-backed allocations, try tcache without locking.
+3. Only on tcache miss, select and lock an arena.
+4. Search arena-local structures from cheapest to most expensive.
+5. Grow the heap or mmap only if all reusable structures miss.
 
 ## 3. Core Data Structure Relationships
 
@@ -115,6 +125,26 @@ classDiagram
       arena_for_chunk(ptr, main)
     }
 
+    class SlabHeader {
+      uint64_t magic
+      uint16_t class_idx
+      uint16_t object_size
+      uint32_t object_count
+      void* base
+    }
+
+    class SlabLookupTable {
+      atomic<void*> base
+      atomic<SlabHeader*> slab
+      lookup(ptr)
+      insert(base, slab)
+    }
+
+    class SmallObject {
+      user bytes
+      next pointer when free
+    }
+
     ArenaManager "1" --> "many" Arena
     Arena --> BinManager
     BinManager --> FastBins
@@ -127,17 +157,49 @@ classDiagram
     UnsortedBin --> Chunk
     TcachePerthread --> Chunk
     HeapInfo --> Arena
+    SlabLookupTable --> SlabHeader
+    SlabHeader --> SmallObject
 ```
 
 Important ownership rules:
 
 - `tcache` is thread-local and does not require an arena lock.
+- slab objects are headerless from the user's object point of view; ownership is recovered from a 64KB-aligned slab base lookup.
 - `Arena` owns all non-tcache bin structures and must be locked before touching them.
 - `Chunk` objects are not separately allocated metadata; chunk headers live inside the managed heap.
 - Non-main arena chunks carry `NON_MAIN_ARENA`, and `my_free` uses `HeapInfo` to find the owning arena.
 - `BinManager::unlink_free_chunk` is the single slow-path unlink helper for chunks that may be in unsorted, small, or large bins.
 
-## 4. Chunk Layout
+## 4. Small Slab Layout
+
+The slab path is intentionally not ptmalloc-shaped. A slab is a 64KB-aligned mapping with one `SlabHeader` at the start and fixed-size objects after it.
+
+```mermaid
+flowchart LR
+    S["64KB aligned slab"]
+    H["SlabHeader<br/>class_idx, object_size, count"]
+    O1["object"]
+    O2["object"]
+    O3["object"]
+    ON["..."]
+
+    S --> H --> O1 --> O2 --> O3 --> ON
+```
+
+Size classes are 16-byte spaced from 16 to 1024 bytes. Free objects use their own first word as a `FreeObj* next` pointer. Allocated objects do not carry per-object headers.
+
+Pointer classification uses:
+
+```text
+base = ptr & ~(64KB - 1)
+slab = slab_lookup_table[base]
+```
+
+The lookup table is populated under a mutex when a slab is created, but reads are lock-free atomic loads because entries are immutable after insertion. This avoids the global-lock-on-free problem that made the first slab version slower.
+
+Current limitation: slabs are not yet returned to the OS when empty. That is intentional for the first architecture slice; the next step is a central span cache/page heap.
+
+## 5. Chunk Layout
 
 Each allocation starts with a `Chunk` header. The user pointer points after `prev_size` and `size`.
 
@@ -173,7 +235,7 @@ free chunk:
 
 `fd_nextsize` and `bk_nextsize` exist for layout compatibility, but the active large-bin implementation currently uses sorted `fd`/`bk` lists plus a binmap instead of maintaining a secondary next-size chain.
 
-## 5. Arena and Heap Layout
+## 6. Arena and Heap Layout
 
 Main arena memory is mapped as a heap region with one top chunk and a fencepost at the end.
 
@@ -208,15 +270,18 @@ That mask only works if non-main heaps begin on `HEAP_MAX_SIZE` boundaries. The 
 
 The fencepost prevents `Chunk::mark_inuse()` from writing past the mapped heap when the previous chunk reaches the region boundary.
 
-## 6. Allocation Path
+## 7. Allocation Path
 
 ```mermaid
 flowchart TD
     Start["my_malloc(size)"]
+    Slab{"size <= 1024<br/>and slab not bypassed?"}
+    SlabHit["slab_malloc<br/>thread-local class list"]
     Size["request2size(size)"]
     TInit["initialize tcache if needed"]
     TTry{"tcache hit?"}
-    TRet["mark chunk in use<br/>return user pointer"]
+    TRet["return user pointer"]
+    ChunkRet["mark chunk in use<br/>return user pointer"]
     Reg["register thread if needed"]
     Arena["ArenaManager::get_arena<br/>lock selected arena"]
     Pipe["AllocPipeline::execute"]
@@ -229,8 +294,12 @@ flowchart TD
     Unlock["unlock arena"]
     Ret["return pointer or null"]
 
-    Start --> Size --> TInit --> TTry
-    TTry -- yes --> TRet
+    Start --> Slab
+    Slab -- yes --> SlabHit
+    Slab -- no --> Size
+    SlabHit --> TRet
+    Size --> TInit --> TTry
+    TTry -- yes --> ChunkRet
     TTry -- no --> Reg --> Arena --> Pipe
     Pipe --> FTry
     FTry -- no --> STry
@@ -246,14 +315,18 @@ flowchart TD
     Sys --> Unlock --> Ret
 ```
 
-The key optimization is that tcache is checked before `ArenaManager::get_arena`. A tcache hit no longer pays for arena lookup or a mutex lock.
+The key architectural change is that small normal allocations bypass chunk metadata, tcache, bins, and arena locks entirely. For chunk-backed allocations, tcache is still checked before `ArenaManager::get_arena`, so a tcache hit no longer pays for arena lookup or a mutex lock.
 
-## 7. Free Path
+Aligned allocations temporarily bypass the slab path because `my_memalign` still manipulates chunk headers internally.
+
+## 8. Free Path
 
 ```mermaid
 flowchart TD
     Start["my_free(ptr)"]
     Null{"ptr == null?"}
+    Slab{"slab pointer?"}
+    SlabFree["push object to<br/>thread-local slab list"]
     Chunk["Chunk::from_user_ptr"]
     Mmap{"IS_MMAPPED?"}
     Unmap["SysMemory::unmap"]
@@ -269,7 +342,9 @@ flowchart TD
 
     Start --> Null
     Null -- yes --> Unlock
-    Null -- no --> Chunk --> Mmap
+    Null -- no --> Slab
+    Slab -- yes --> SlabFree
+    Slab -- no --> Chunk --> Mmap
     Mmap -- yes --> Unmap
     Mmap -- no --> TRange
     TRange -- yes --> TPut
@@ -282,11 +357,13 @@ Tcache chunks are treated as allocated from the arena coalescing perspective. Th
 
 Forward and backward coalescing now use bin membership rather than assuming that every adjacent free chunk is still in unsorted. This matters because an earlier allocation may have scanned unsorted and moved the neighbor into a small or large bin. The free path asks `BinManager` to unlink the neighbor from the correct structure before merging.
 
-## 8. Realloc Growth Path
+## 9. Realloc Growth Path
 
 ```mermaid
 flowchart TD
     Start["my_realloc(ptr, new_size)"]
+    Slab{"slab pointer?"}
+    SlabEnough{"new size <= slab usable?"}
     Same{"old chunk already large enough?"}
     Top{"next chunk is arena top<br/>and enough total space?"}
     NextFree{"next physical chunk is linked<br/>in a free bin and enough?"}
@@ -294,7 +371,11 @@ flowchart TD
     InPlace["return same pointer"]
     Fallback["malloc new chunk<br/>memcpy old bytes<br/>free old chunk"]
 
-    Start --> Same
+    Start --> Slab
+    Slab -- yes --> SlabEnough
+    SlabEnough -- yes --> InPlace
+    SlabEnough -- no --> Fallback
+    Slab -- no --> Same
     Same -- yes --> InPlace
     Same -- no --> Top
     Top -- yes --> Split --> InPlace
@@ -303,7 +384,9 @@ flowchart TD
     NextFree -- no --> Fallback
 ```
 
-The previous implementation always used allocate-copy-free for growth. The current implementation first tries to grow in place:
+For slab objects, `realloc` returns the same pointer when the new size fits the size class; otherwise it allocates a new object/chunk, copies the old class size, and frees the slab object.
+
+For chunk-backed objects, the previous implementation always used allocate-copy-free for growth. The current implementation first tries to grow in place:
 
 - absorb the arena top chunk when the allocation is adjacent to top;
 - unlink and absorb the next physical free chunk when it is in unsorted, small, or large bins;
@@ -311,7 +394,7 @@ The previous implementation always used allocate-copy-free for growth. The curre
 
 This directly targets fragmentation-heavy realloc workloads because it avoids creating a new allocation and freeing the old one when neighboring space is already available.
 
-## 9. Bin Flow
+## 10. Bin Flow
 
 ```mermaid
 flowchart LR
@@ -343,7 +426,7 @@ The unsorted bin is intentionally a staging area, not a permanent store. On allo
 - non-matching chunks are moved to small or large bins;
 - arbitrary larger chunks are not split directly from unsorted, because that acts like first-fit and caused severe fragmentation in random workloads.
 
-## 10. Large Bin Search
+## 11. Large Bin Search
 
 ```mermaid
 flowchart TD
@@ -366,10 +449,11 @@ flowchart TD
 
 Large bins are sorted largest-to-smallest in insertion order, and allocation walks from the back to find the smallest chunk that can satisfy the request. The binmap avoids scanning empty large-bin ranges.
 
-## 11. What Comes From ptmalloc and What Is Custom
+## 12. What Comes From ptmalloc and What Is Custom
 
 | Area | ptmalloc-style design | Project-specific implementation |
 |---|---|---|
+| Small objects | Usually chunk/tcache based | Headerless 64KB slabs with 16-byte size classes |
 | Chunk metadata | Boundary tags, low-bit flags | C++ `Chunk` methods and strong `ChunkSize` wrappers |
 | Tcache | Per-thread lock-free cache | Safe-linking plus static bootstrap storage |
 | Fastbins | Deferred coalescing for tiny chunks | Atomic CAS stack class |
@@ -380,7 +464,13 @@ Large bins are sorted largest-to-smallest in insertion order, and allocation wal
 | Realloc | Try to expand in place before moving | Grow into top or next linked free chunk, then split remainder |
 | Debug checks | Development diagnostics | Compiled out unless `MY_PTMALLOC_ENABLE_DEBUG=1` |
 
-## 12. Optimization Summary
+## 13. Optimization Summary
+
+### Small-object Slab Path
+
+Normal allocations up to 1024 bytes now use fixed-size slab objects instead of chunk headers. This reduces metadata traffic and lets the common small-object path avoid arena locks and bin operations.
+
+The first implementation intentionally keeps slab reclamation simple: objects return to thread-local lists, and slabs are kept for reuse. A future central span cache can reclaim empty slabs or rebalance them across threads.
 
 ### Tcache Before Arena Lock
 
@@ -424,19 +514,24 @@ When free/coalescing merges a chunk into the arena top, the allocator now calls 
 
 Metadata validation and `fprintf` diagnostics are useful during allocator development but expensive in release builds. They are behind `MY_PTMALLOC_ENABLE_DEBUG`.
 
-## 13. Current Performance Shape
+## 14. Current Performance Shape
 
 Measured on Linux x86_64 with `-O2 -march=native` on May 4, 2026:
 
-- 64B same-size allocation is roughly at glibc parity in the current run;
-- batch allocation/free remains faster because most operations avoid arena locks;
+- 32B and 64B same-size allocation are near glibc in the current run;
+- 256B same-size allocation is slightly ahead in the current run;
+- batch allocation/free remains faster because small objects stay in slab thread-local lists;
 - random alloc/free/realloc is still slower than glibc;
-- fragmentation-heavy realloc workloads improved significantly but remain the biggest throughput gap;
-- large allocation RSS is much closer to glibc after top-merge trimming and better coalescing;
-- multi-threaded throughput still depends heavily on tcache hit rate, arena reuse, and cross-thread scheduling.
+- fragmentation-heavy realloc workloads improved again after the slab path but remain a throughput gap;
+- large allocation throughput is ahead in this run, with RSS close to glibc;
+- multi-threaded throughput is still behind because there is no central slab cache or remote-free batching yet.
 
-## 14. Remaining Work
+## 15. Remaining Work
 
+- Add a central slab/span cache so thread-local slab lists can refill and drain in batches.
+- Track empty slabs and return them to the page heap or OS.
+- Add remote-free handling so cross-thread frees do not poison the freeing thread's local cache.
+- Replace the fixed slab lookup hash with a proper page map for O(1) span lookup without probing.
 - Add more `realloc` cases: shrink splitting, mmap remap, and more aggressive next/top remainder handling.
 - Trigger `systrim` on more heap-growth/free paths, not only top merges.
 - Add automatic thread-exit tcache flushing.

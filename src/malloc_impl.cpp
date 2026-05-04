@@ -7,6 +7,7 @@
 #include "my_ptmalloc/thread_registry.h"
 #include "my_ptmalloc/tcache.h"
 #include "my_ptmalloc/observer.h"
+#include "my_ptmalloc/slab_allocator.h"
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/types.h"
 #include "my_ptmalloc/chunk.h"
@@ -19,6 +20,10 @@ void* my_malloc(size_t size) noexcept {
 
     // Edge case: zero-size allocation
     if (size == 0) size = 1;
+
+    if (void* slab = slab_malloc(size)) {
+        return slab;
+    }
 
     // Compute aligned chunk size
     ChunkSize nb = request2size(UserSize{size});
