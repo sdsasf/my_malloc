@@ -11,6 +11,7 @@
 #include "my_ptmalloc/family_allocators.h"
 #include "my_ptmalloc/runtime_allocator.h"
 #include "my_ptmalloc/allocator_lab.h"
+#include "my_ptmalloc/adaptive_allocator.h"
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/types.h"
 #include "my_ptmalloc/chunk.h"
@@ -23,6 +24,11 @@ void* my_malloc(size_t size) noexcept {
 
     // Edge case: zero-size allocation
     if (size == 0) size = 1;
+
+    // Independent adaptive allocator — bypass all teaching backends
+    if (runtime_mode_is_adaptive()) {
+        return adaptive_malloc(size);
+    }
 
     RuntimeAllocatorKind impl = runtime_select_allocator(size);
     switch (impl) {

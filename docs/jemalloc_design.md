@@ -6,6 +6,8 @@
 
 jemalloc's architecture is built around arenas. Each thread is assigned to an arena. Small allocations use size-class runs owned by that arena, and thread caches reduce lock traffic.
 
+Industrial jemalloc emphasizes scalable arenas and extent lifecycle management. Arenas partition allocator state so unrelated threads contend less. Runs carve pages into same-size slots, while extent states and decay policies decide when unused memory should be retained, purged, or returned.
+
 ```mermaid
 flowchart TB
     Thread["thread"]
@@ -17,6 +19,25 @@ flowchart TB
     Thread --> Tcache
     Tcache -- empty --> Arena
     Arena --> Run --> Obj
+```
+
+The project implements the learning subset:
+
+```mermaid
+flowchart LR
+    Thread["thread"]
+    Assign["round-robin arena assignment"]
+    Tcache["per-thread tcache"]
+    Arena["one of 8 arenas"]
+    ClassList["arena size-class run list"]
+    Run["64KB run"]
+    Large["large direct mmap"]
+
+    Thread --> Assign --> Arena
+    Thread --> Tcache
+    Tcache -- miss/refill --> ClassList --> Run
+    Arena --> ClassList
+    Thread -- large --> Large
 ```
 
 ## Current Implementation
@@ -45,6 +66,8 @@ Implemented features:
 | Rich `mallctl` stats | Not implemented |
 | Per-bin advanced policies | Simplified run lists |
 | Background purge | Not implemented |
+
+This simplified design is meant to show how arenas, runs, and tcaches fit together. It does not implement jemalloc's full extent tree, decay-based purging, profiling, `mallctl`, or advanced bin policies.
 
 ## Why It Is Useful
 

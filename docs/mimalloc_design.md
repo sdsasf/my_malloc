@@ -6,6 +6,8 @@
 
 mimalloc's most important lesson for this project is ownership. A page belongs to a heap/thread. Local frees can be reused immediately by the owner. Remote frees are placed on a remote list and later collected by the owner.
 
+Industrial mimalloc organizes memory into heaps, segments, and pages. It is especially careful about page ownership, local free lists, remote frees, abandoned pages, and returning unused memory. The teaching version focuses on the ownership and remote-free path because that is the most visible design difference for cross-thread workloads.
+
 ```mermaid
 flowchart TB
     A["thread A heap"]
@@ -18,6 +20,23 @@ flowchart TB
     B -- frees object owned by A --> Remote
     A -- next allocation drains --> Remote
     Remote --> Local
+```
+
+The simplified project path is:
+
+```mermaid
+flowchart LR
+    Req["malloc/free"]
+    Heap["thread-local heap id"]
+    Page["64KB owned page<br/>size class"]
+    Local["owner local free list"]
+    Remote["atomic remote list"]
+    Large["large direct mmap"]
+
+    Req --> Heap --> Page --> Local
+    Req -- non-owner free --> Remote
+    Remote -- owner drains --> Local
+    Req -- large --> Large
 ```
 
 ## Current Implementation
@@ -43,6 +62,8 @@ Implemented features:
 | Sophisticated free-list sharding | Simplified local/remote lists |
 | Secure mode hardening | Limited |
 | NUMA-aware ownership | Not implemented |
+
+This simplified design does not model mimalloc's full segment lifecycle, abandoned-page recovery, eager reset/decommit policies, or security modes. It is intentionally focused on learning page ownership and remote-free mechanics.
 
 ## Why It Is Useful
 

@@ -2,6 +2,7 @@
 
 #include "my_ptmalloc/strategy.h"
 #include "my_ptmalloc/my_malloc.h"
+#include "my_ptmalloc/adaptive_allocator.h"
 
 #include <cstdlib>
 
@@ -46,6 +47,11 @@ void adaptive_init() noexcept {
     my_malloc_init();
 }
 
+void adaptive_demo_init() noexcept {
+    setenv("MY_MALLOC_MODE", "adaptive_demo", 1);
+    my_malloc_init();
+}
+
 void* libc_malloc_wrap(size_t size) noexcept {
     return std::malloc(size);
 }
@@ -62,6 +68,16 @@ size_t libc_usable_size_wrap(void*) noexcept {
     return 0;
 }
 
+StrategyStats adaptive_stats_wrap() noexcept {
+    AdaptiveStatsSnapshot s = adaptive_stats_snapshot();
+    return StrategyStats{
+        s.malloc_calls,
+        s.free_calls,
+        s.realloc_calls,
+        0,
+    };
+}
+
 } // namespace
 
 StrategyDescriptor hybrid_strategy_descriptor() noexcept {
@@ -76,7 +92,7 @@ StrategyDescriptor hybrid_strategy_descriptor() noexcept {
             my_free,
             my_realloc,
             my_malloc_usable_size,
-            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
+            adaptive_stats_wrap,
         },
     };
 }
@@ -153,9 +169,26 @@ StrategyDescriptor adaptive_strategy_descriptor() noexcept {
     return StrategyDescriptor{
         STRATEGY_API_VERSION,
         "adaptive",
-        "Adaptive selection policy over concrete teaching allocator implementations",
+        "Independent adaptive allocator with internal strategies",
         StrategyVTable{
             adaptive_init,
+            noop_shutdown,
+            my_malloc,
+            my_free,
+            my_realloc,
+            my_malloc_usable_size,
+            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
+        },
+    };
+}
+
+StrategyDescriptor adaptive_demo_strategy_descriptor() noexcept {
+    return StrategyDescriptor{
+        STRATEGY_API_VERSION,
+        "adaptive_demo",
+        "Legacy demo: dispatches to teaching allocators",
+        StrategyVTable{
+            adaptive_demo_init,
             noop_shutdown,
             my_malloc,
             my_free,

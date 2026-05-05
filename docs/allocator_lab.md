@@ -1,8 +1,13 @@
 # Allocator Lab Guide
 
-This project is also a small allocator laboratory. It lets you run built-in allocators, add your own allocator strategy, validate correctness, and measure performance with the same benchmark harness.
+This project is also a small allocator laboratory. It lets you run teaching allocators based on industrial designs, run the independent adaptive allocator, add your own allocator strategy, validate correctness, and measure performance with the same benchmark harness.
 
 ## 1. Why A Strategy Lab Exists
+
+The lab has two roles:
+
+- reproduce the core mechanisms of industrial allocators for learning, without claiming production completeness;
+- compare those teaching allocators with the independent adaptive allocator under the same correctness and benchmark harness.
 
 Allocator comparisons are easy to make unfair. A meaningful comparison needs:
 
@@ -26,6 +31,7 @@ flowchart TB
     JE["jemalloc_like"]
     MI["mimalloc_like"]
     AD["adaptive"]
+    Demo["adaptive_demo"]
     Libc["libc"]
     Plugin["plugin:path.so"]
 
@@ -37,6 +43,7 @@ flowchart TB
     API --> JE
     API --> MI
     API --> AD
+    API --> Demo
     API --> Libc
     API --> Plugin
 ```
@@ -50,7 +57,8 @@ flowchart TB
 | `tcmalloc_like` | Thread caches, central free lists, 64KB spans | Study tcmalloc-style batching and size classes |
 | `jemalloc_like` | Arenas, size-class runs, per-thread tcache | Study arena/run organization |
 | `mimalloc_like` | Per-thread heaps, owned pages, remote-free queues | Study cross-thread free ownership |
-| `adaptive` | Size-based dispatcher over teaching modes | Study policy selection |
+| `adaptive` | Independent adaptive backend with internal strategies | Study adaptive ownership, metadata, and policy boundaries |
+| `adaptive_demo` / `demo_all` | Legacy dispatcher over teaching modes | Demonstrate cross-allocator policy selection |
 | `libc` / `glibc` | System malloc | Reference baseline |
 | `plugin:path.so` | External shared library | User-defined allocator experiments |
 
@@ -169,49 +177,57 @@ done
 | Empty span release | `fragmentation`, `rptest`, long phase-changing workloads |
 | Lock contention reduction | `larson`, `alloc-test`, `cross_thread_free` |
 
-## 7. Adaptive Experiments
+## 7. Adaptive Allocator Experiments
 
-A custom adaptive allocator should first expose metrics. Good metrics include:
+The built-in `adaptive` strategy is the experimental allocator design in this project, not a wrapper around the teaching allocators. Its internal strategies should be designed for low-cost switching and stable ownership routing. Useful telemetry includes:
 
 - allocation count by size class;
 - free count by size class;
-- tcache/slab/bin hit rate;
+- pool hit/miss rate;
 - remote-free count;
 - mapped bytes;
 - active bytes;
 - cached free bytes;
 - number of empty slabs/spans;
 - arena lock contention;
-- p50/p99 allocation latency samples.
+- EWMA and p50/p99 allocation latency samples.
 
-Start with heuristic policies before reinforcement learning:
+The current adaptive allocator includes both simple baselines and online bandit policies:
+
+- `heuristic`: size-based baseline;
+- `round_robin`: ownership stress baseline;
+- `epsilon_greedy`: classic explore/exploit bandit;
+- `ucb1`: upper-confidence-bound bandit;
+- `thompson_sampling`: Thompson-style success/failure sampling.
+
+Use these before moving to heavier reinforcement learning or offline models:
 
 ```text
 if remote_free_ratio is high:
-    route frees through owner remote queues
+    prefer an internal strategy with owner remote queues
 
 if empty_slab_bytes is high:
-    release slabs to central cache or OS
+    tune the adaptive small-object release policy
 
 if size_class hit rate is high:
-    increase local batch size
+    tune the adaptive local batch size
 
 if RSS grows much faster than active bytes:
-    lower release threshold
+    tune the adaptive release threshold
 ```
 
-Reinforcement learning can be added later, but it needs stable observations and a reward function. For allocator experiments, a practical reward usually combines throughput, p99 latency, and memory overhead:
+Machine-learning or reinforcement-learning policies can be added later, but they need stable observations and a reward function. For allocator experiments, a practical reward usually combines throughput, p99 latency, adaptation speed after phase changes, and memory overhead:
 
 ```text
-reward = throughput_score - latency_penalty - rss_penalty
+reward = throughput_score - latency_penalty - rss_penalty - switching_penalty
 ```
 
-Without reliable metrics, an RL policy will mostly learn benchmark noise.
+Without reliable metrics, an ML/RL policy will mostly learn benchmark noise.
 
 ## 8. Notes For Contributors
 
 - Keep allocator metadata easy to inspect.
-- Add one policy at a time.
+- Add one adaptive internal strategy or policy at a time.
 - Benchmark against at least `hybrid`, `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, `mimalloc_like`, `adaptive`, and `libc`.
 - Do not report external benchmark results if a dependency was stubbed or skipped.
 - Document simplifications clearly. This is a learning project, so knowing what is not implemented is as important as knowing what is implemented.

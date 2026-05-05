@@ -8,6 +8,7 @@
 #include "my_ptmalloc/family_allocators.h"
 #include "my_ptmalloc/runtime_allocator.h"
 #include "my_ptmalloc/allocator_lab.h"
+#include "my_ptmalloc/adaptive_allocator.h"
 #include <cstring>
 #include <new>
 
@@ -44,6 +45,10 @@ void* my_memalign(size_t alignment, size_t size) noexcept {
     // Ensure alignment >= MALLOC_ALIGNMENT so chunk headers are always aligned
     if (alignment < MALLOC_ALIGNMENT) alignment = MALLOC_ALIGNMENT;
     if (alignment <= MALLOC_ALIGNMENT) return my_malloc(size);
+
+    if (runtime_mode_is_adaptive()) {
+        return adaptive_memalign(alignment, size);
+    }
 
     if (runtime_mode_uses_family_allocators()) {
         RuntimeAllocatorKind impl = runtime_select_allocator(size);
@@ -150,6 +155,11 @@ int my_mallopt(int param, int value) noexcept {
 
 size_t my_malloc_usable_size(void* ptr) noexcept {
     if (!ptr) return 0;
+
+    if (adaptive_owns(ptr)) {
+        return adaptive_usable_size(ptr);
+    }
+
     if (runtime_mode_uses_family_allocators()) {
         size_t family_usable = family_usable_size(ptr);
         if (family_usable != 0) return family_usable;

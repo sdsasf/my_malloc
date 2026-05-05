@@ -38,6 +38,10 @@ inline bool load_strategy(const char* spec, LoadedStrategy& out) {
         out.desc = adaptive_strategy_descriptor();
         return true;
     }
+    if (std::strcmp(spec, "adaptive_demo") == 0 || std::strcmp(spec, "demo_all") == 0) {
+        out.desc = adaptive_demo_strategy_descriptor();
+        return true;
+    }
     if (std::strcmp(spec, "libc") == 0 || std::strcmp(spec, "glibc") == 0) {
         out.desc = libc_strategy_descriptor();
         return true;

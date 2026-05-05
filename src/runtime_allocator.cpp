@@ -119,6 +119,11 @@ RuntimeAllocatorKind runtime_select_allocator(size_t size) noexcept {
         case AllocMode::MimallocLike:
             return RuntimeAllocatorKind::MimallocLike;
         case AllocMode::Adaptive:
+            // Independent adaptive allocator — handled directly in
+            // malloc_impl/free_impl/realloc_impl, never reaches here.
+            return RuntimeAllocatorKind::Hybrid;
+        case AllocMode::AdaptiveDemo:
+            // Legacy demo: dispatch across teaching allocators
             init_policy();
             switch (policy_kind) {
                 case AdaptivePolicyKind::Heuristic:
@@ -174,17 +179,22 @@ bool runtime_mode_uses_family_allocators() noexcept {
         case AllocMode::TcmallocLike:
         case AllocMode::JemallocLike:
         case AllocMode::MimallocLike:
-        case AllocMode::Adaptive:
+        case AllocMode::AdaptiveDemo:
             return true;
         case AllocMode::Hybrid:
         case AllocMode::PtmallocOnly:
+        case AllocMode::Adaptive:
             return false;
     }
     return false;
 }
 
-bool runtime_mode_is_adaptive_policy() noexcept {
+bool runtime_mode_is_adaptive() noexcept {
     return allocator_mode() == AllocMode::Adaptive;
+}
+
+bool runtime_mode_is_adaptive_demo() noexcept {
+    return allocator_mode() == AllocMode::AdaptiveDemo;
 }
 
 } // namespace my_ptmalloc

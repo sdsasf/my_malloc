@@ -10,6 +10,8 @@ ptmalloc manages variable-size chunks with boundary tags:
 [prev_size][size | flags][user bytes...]
 ```
 
+Industrial ptmalloc is built around arenas, chunks, bins, and system-memory growth. The core idea is to keep enough metadata next to each allocation so `free` can coalesce adjacent free chunks, while bins make future search faster.
+
 Free chunks are linked into bins:
 
 ```mermaid
@@ -24,6 +26,28 @@ flowchart LR
     SYS["mmap / heap growth"]
 
     M --> TC --> FB --> SB --> UB --> LB --> TOP --> SYS
+```
+
+The simplified chunk lifecycle in this project is:
+
+```mermaid
+flowchart TB
+    Req["malloc request"]
+    Size["request2size<br/>alignment + header"]
+    Tcache["try tcache"]
+    Arena["lock arena"]
+    Bins["search fast/small/unsorted/large bins"]
+    Split["split larger chunk if needed"]
+    Top["use top chunk"]
+    Sys["extend heap or mmap"]
+    Free["free"]
+    Coalesce["boundary-tag coalesce"]
+
+    Req --> Size --> Tcache
+    Tcache -- miss --> Arena --> Bins --> Split
+    Bins -- miss --> Top
+    Top -- insufficient --> Sys
+    Free --> Coalesce --> Bins
 ```
 
 ## Implemented Features
@@ -48,6 +72,8 @@ flowchart LR
 | Complex thread-exit cleanup | Limited lifecycle handling |
 | Full `mallopt`/`malloc_info` support | Only common threshold knobs |
 | Many realloc corner cases | Implements important in-place grow cases, then copy fallback |
+
+The goal is to expose the mechanics: boundary tags, bin selection, arena locking, tcache fast paths, split/coalesce behavior, top chunk growth, and mmap fallback. It does not try to match every glibc tuning rule or hardening feature.
 
 ## What To Benchmark
 

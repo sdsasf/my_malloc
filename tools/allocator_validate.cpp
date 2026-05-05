@@ -40,8 +40,27 @@ static bool validate_realloc(const my_ptmalloc::StrategyDescriptor& s) {
             return false;
         }
     }
-    s.vtable.deallocate(q);
+
+    char* r = static_cast<char*>(s.vtable.reallocate(q, 16));
+    if (!check(r != nullptr, "realloc shrink failed")) return false;
+    for (int i = 0; i < 16; ++i) {
+        if (!check(r[i] == static_cast<char>(i), "realloc shrink did not preserve data")) {
+            s.vtable.deallocate(r);
+            return false;
+        }
+    }
+    s.vtable.deallocate(r);
     return true;
+}
+
+static bool validate_usable_size(const my_ptmalloc::StrategyDescriptor& s) {
+    if (!s.vtable.usable_size) return true;
+    void* p = s.vtable.allocate(123);
+    if (!check(p != nullptr, "usable_size allocation failed")) return false;
+    size_t usable = s.vtable.usable_size(p);
+    bool ok = check(usable == 0 || usable >= 123, "usable_size smaller than request");
+    s.vtable.deallocate(p);
+    return ok;
 }
 
 static bool validate_random(const my_ptmalloc::StrategyDescriptor& s) {
@@ -91,6 +110,7 @@ int main(int argc, char** argv) {
 
     bool ok = validate_basic(loaded.desc) &&
               validate_realloc(loaded.desc) &&
+              validate_usable_size(loaded.desc) &&
               validate_random(loaded.desc);
 
     std::printf("%s validation: %s\n", loaded.desc.name, ok ? "PASS" : "FAIL");

@@ -25,6 +25,7 @@ enum class AdaptivePolicyKind {
 [[nodiscard]] AdaptivePolicyKind runtime_adaptive_policy() noexcept;
 [[nodiscard]] const char* runtime_adaptive_policy_name() noexcept;
 [[nodiscard]] bool runtime_mode_uses_family_allocators() noexcept;
-[[nodiscard]] bool runtime_mode_is_adaptive_policy() noexcept;
+[[nodiscard]] bool runtime_mode_is_adaptive() noexcept;
+[[nodiscard]] bool runtime_mode_is_adaptive_demo() noexcept;
 
 } // namespace my_ptmalloc

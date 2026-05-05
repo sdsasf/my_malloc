@@ -6,6 +6,8 @@
 
 Small allocations are rounded into size classes. Each thread first allocates from a local list. If the local list is empty, it refills from a central list. If the central list is empty, a new span is split into objects.
 
+Industrial tcmalloc separates the hot path from global memory management. Small objects are served from thread/per-CPU caches, central free lists refill those caches in batches, and a page heap manages spans of pages. The important teaching idea is that most small allocations should avoid variable-size chunk search and avoid global locks.
+
 ```mermaid
 flowchart TB
     Req["malloc(size <= 4096)"]
@@ -21,6 +23,24 @@ flowchart TB
     Span -- split objects --> Central
     Central -- batch --> Local
     Local --> Obj
+```
+
+This project keeps the same conceptual pipeline with a smaller implementation:
+
+```mermaid
+flowchart LR
+    Size["size class<br/>16B spacing"]
+    TL["thread_local list"]
+    Batch["batch refill/drain"]
+    Central["locked central list"]
+    Span["64KB span<br/>split into objects"]
+    Large["large direct mmap"]
+
+    Size --> TL
+    TL <--> Batch
+    Batch <--> Central
+    Central --> Span
+    Size -- >4096B --> Large
 ```
 
 ## Current Implementation
@@ -53,6 +73,8 @@ Implemented features:
 | Per-CPU cache mode | Thread-local cache only |
 | Transfer cache tuning | Fixed batch constants |
 | Empty span release | Not implemented yet |
+
+The simplified design deliberately avoids the full page heap, transfer cache, per-CPU cache, huge-page aware backend, and tuned size-class table. That keeps the code readable while preserving the core lesson: size-class objects plus local caches can make small allocations very cheap.
 
 ## Why It Is Useful
 

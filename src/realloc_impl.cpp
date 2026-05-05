@@ -10,6 +10,7 @@
 #include "my_ptmalloc/family_allocators.h"
 #include "my_ptmalloc/runtime_allocator.h"
 #include "my_ptmalloc/allocator_lab.h"
+#include "my_ptmalloc/adaptive_allocator.h"
 #include "my_ptmalloc/types.h"
 #include <cstring>
 
@@ -47,6 +48,10 @@ void* my_realloc(void* ptr, size_t size) noexcept {
     if (size == 0) {
         my_free(ptr);
         return nullptr;
+    }
+
+    if (adaptive_owns(ptr)) {
+        return adaptive_realloc(ptr, size);
     }
 
     if (runtime_mode_uses_family_allocators()) {
