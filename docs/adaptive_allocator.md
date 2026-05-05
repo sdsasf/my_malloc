@@ -1,63 +1,147 @@
-# Adaptive Allocator Mode
+# Adaptive Policy Layer
 
-`MY_MALLOC_MODE=adaptive` selects a simple teaching policy that routes allocations by size.
-
-## Current Policy
+`MY_MALLOC_MODE=adaptive` does not select a separate allocator implementation. It enables a decision module in the runtime dispatcher. For each allocation, the decision module chooses one concrete allocator implementation:
 
 ```text
-size <= 256      -> mimalloc_like
-size <= 4096     -> tcmalloc_like
-size > 4096      -> direct mmap-backed large allocation
+hybrid
+ptmalloc
+tcmalloc_like
+jemalloc_like
+mimalloc_like
 ```
 
-This is intentionally simple. It is not a reinforcement-learning allocator yet. It exists so that the project has a concrete adaptive baseline before adding dynamic policies.
+```mermaid
+flowchart TB
+    API["malloc(size)"]
+    Policy["adaptive decision module"]
+    HY["hybrid"]
+    PT["ptmalloc"]
+    TC["tcmalloc_like"]
+    JE["jemalloc_like"]
+    MI["mimalloc_like"]
 
-## Why This Policy
+    API --> Policy
+    Policy --> HY
+    Policy --> PT
+    Policy --> TC
+    Policy --> JE
+    Policy --> MI
+```
 
-| Size range | Selected path | Reason |
+## Policy Selection
+
+Configure the policy with:
+
+```bash
+MY_MALLOC_MODE=adaptive
+MY_MALLOC_ADAPTIVE_POLICY=heuristic
+```
+
+Supported policies:
+
+| Policy | Meaning | Status |
 |---|---|---|
-| Tiny objects | mimalloc-like | Tiny objects often appear in cross-thread/server workloads; owner remote-free is useful to study. |
-| Small objects | tcmalloc-like | Thread cache plus central free list gives a clear size-class batching baseline. |
-| Large objects | mmap | Keeps large allocations out of small-object caches. |
+| `heuristic` | Size-based rules that can choose every concrete allocator | Implemented |
+| `round_robin` | Rotates through all concrete allocators, useful for stress-testing mixed ownership | Implemented |
+| `bandit` / `rl_bandit` | Lightweight exploration around the heuristic baseline | Implemented as a simple teaching baseline |
+| `fixed:<impl>` | Adaptive dispatcher is enabled but always chooses one implementation | Implemented |
+| `ml:<model>` | Offline model policy | Interface direction, not implemented |
+| `llm:<endpoint>` | LLM-driven policy controller | Interface direction, not implemented |
+| `rl:<agent>` | Full reinforcement-learning agent | Interface direction, not implemented |
 
-## Future Adaptive Signals
+Examples:
 
-A stronger adaptive allocator should observe:
+```bash
+MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_POLICY=heuristic ./build/bench_my
+MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_POLICY=round_robin ./build/bench_my
+MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_POLICY=bandit ./build/bench_my
+MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_POLICY=fixed:jemalloc_like ./build/bench_my
+```
 
-- allocation histogram by size class;
+Valid fixed targets:
+
+```text
+hybrid
+ptmalloc
+tcmalloc_like
+jemalloc_like
+mimalloc_like
+```
+
+## Current Heuristic
+
+The default policy is:
+
+```text
+size <= 128       -> mimalloc_like
+size <= 1024      -> tcmalloc_like
+size <= 4096      -> jemalloc_like
+size <= 64 KiB    -> ptmalloc
+size > 64 KiB     -> hybrid
+```
+
+This deliberately touches all concrete implementations. It is not claiming to be optimal; it is a readable baseline that makes the adaptive layer observable.
+
+## Bandit Baseline
+
+`bandit` is a lightweight teaching policy. It starts from the heuristic choice but occasionally explores under-used allocator implementations. It is not a production RL allocator because it does not yet measure reward from latency, RSS, or fragmentation.
+
+To make it a real RL/bandit policy, the runtime must record:
+
+- selected implementation;
+- allocation size class;
+- allocation latency;
+- free latency;
 - remote-free ratio;
-- thread cache hit rate;
-- central refill/drain rate;
+- mapped bytes;
+- live bytes;
+- fragmentation estimate;
+- failure count.
+
+Then the reward can be something like:
+
+```text
+reward = throughput_score - latency_penalty - rss_penalty - fragmentation_penalty
+```
+
+## ML / LLM / RL Extension Point
+
+The adaptive layer should remain a policy module, not an allocator. A future ML, LLM, or RL policy should only decide:
+
+```text
+observation -> allocator implementation
+```
+
+It should not own allocation metadata. Concrete allocator implementations still own their own memory layout and free paths.
+
+Possible observations:
+
+- current allocation size;
+- per-size-class histogram;
+- recent allocator choice;
+- per-implementation hit/miss count;
+- remote-free rate;
 - arena lock contention;
 - live bytes vs mapped bytes;
-- empty pages/spans;
-- p99 allocation latency.
+- empty span/page count;
+- p50/p99 latency samples.
 
-## Future Policies
+Possible policy implementations:
 
-Practical next steps:
+| Policy type | How it would work |
+|---|---|
+| Heuristic | Static rules or configurable thresholds |
+| Offline ML | Load a small decision tree/table trained from benchmark logs |
+| LLM controller | Periodically rewrite high-level policy parameters, not per-allocation decisions |
+| RL agent | Online or offline agent updates policy from measured reward |
 
-1. Add structured counters for each mode.
-2. Add heuristic policy tables configurable from environment variables.
-3. Add repeated benchmark result collection.
-4. Only then experiment with learned policies.
+Per-allocation LLM calls are not practical. If an LLM is used, it should operate as a slow control-plane policy tuner.
 
-Example heuristic:
-
-```text
-if remote_free_ratio > threshold:
-    prefer mimalloc-like ownership for that size class
-
-if central_refill_rate is high:
-    increase tcmalloc-like batch size
-
-if mapped_bytes >> live_bytes:
-    release empty spans/pages more aggressively
-```
-
-Run:
+## Run
 
 ```bash
 ./build/allocator_validate --strategy adaptive
-./build/bench_runner --strategy adaptive --profile all --json
+MY_MALLOC_ADAPTIVE_POLICY=heuristic ./build/bench_runner --strategy adaptive --profile all --json
+MY_MALLOC_ADAPTIVE_POLICY=bandit ./build/bench_runner --strategy adaptive --profile all --json
+MY_MALLOC_ADAPTIVE_POLICY=fixed:mimalloc_like ./build/bench_runner --strategy adaptive --profile all --json
 ```

@@ -61,7 +61,7 @@ build/libmy_ptmalloc.so
 | `tcmalloc_like` | Teaching thread-cache/central-list/span allocator |
 | `jemalloc_like` | Teaching arena/run/tcache allocator |
 | `mimalloc_like` | Teaching per-thread heap/page/remote-free allocator |
-| `adaptive` | Simple size-based dispatcher over teaching modes |
+| `adaptive` | Configurable decision policy over all concrete implementations |
 | `libc` / `glibc` | System allocator baseline |
 | `plugin:path.so` | External allocator strategy |
 
@@ -297,9 +297,9 @@ Interpretation:
 
 Detailed raw-result notes are in [external_benchmark_results.md](external_benchmark_results.md).
 
-## 14. Current Multi-mode Smoke Results
+## 14. Current Multi-mode Results
 
-After adding the teaching allocator-family modes, the following smoke checks were run locally:
+After adding the teaching allocator-family modes and adaptive policies, the following validation checks were run locally:
 
 ```bash
 ./build/allocator_validate --strategy tcmalloc_like
@@ -310,35 +310,66 @@ LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=tcmalloc_like ./build/test_b
 LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=jemalloc_like ./build/test_basic
 LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=mimalloc_like ./build/test_basic
 LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=adaptive ./build/test_basic
+MY_MALLOC_ADAPTIVE_POLICY=bandit ./build/bench_runner --strategy adaptive --profile smoke --json
+MY_MALLOC_ADAPTIVE_POLICY=fixed:mimalloc_like ./build/bench_runner --strategy adaptive --profile smoke --json
 ```
 
 All passed.
 
-Small smoke benchmark sample:
+Micro profile command:
 
-| Strategy | `same_size_64` ops/sec | `random` ops/sec |
+```bash
+for s in libc hybrid ptmalloc tcmalloc_like jemalloc_like mimalloc_like; do
+  ./build/bench_runner --strategy "$s" --profile micro --json
+done
+
+for p in heuristic bandit round_robin fixed:hybrid fixed:ptmalloc fixed:tcmalloc_like fixed:jemalloc_like fixed:mimalloc_like; do
+  MY_MALLOC_ADAPTIVE_POLICY="$p" ./build/bench_runner --strategy adaptive --profile micro --json
+done
+```
+
+Micro profile results:
+
+| Strategy / policy | `same_size_64` | `same_size_256` | `batch` | `random` | Peak RSS KB |
+|---|---:|---:|---:|---:|---:|
+| `libc` | 9,687,157 | 8,721,920 | 4,994,426 | 680,531 | 30,976 |
+| `hybrid` | 19,066,447 | 23,997,094 | 7,294,658 | 410,129 | 31,104 |
+| `ptmalloc` | 25,131,401 | 22,547,922 | 6,969,109 | 838,804 | 30,976 |
+| `tcmalloc_like` | 26,750,315 | 28,639,500 | 10,593,669 | 868,243 | 30,976 |
+| `jemalloc_like` | 24,157,087 | 26,551,248 | 8,583,202 | 597,775 | 30,976 |
+| `mimalloc_like` | 27,092,665 | 30,810,164 | 9,526,397 | 918,838 | 30,976 |
+| `adaptive:heuristic` | 25,075,164 | 28,697,567 | 6,478,567 | 703,114 | 30,976 |
+| `adaptive:bandit` | 28,455,897 | 28,386,798 | 9,412,547 | 624,368 | 30,976 |
+| `adaptive:round_robin` | 5,994,098 | 12,598,238 | 6,321,115 | 675,147 | 30,976 |
+| `adaptive:fixed:hybrid` | 27,161,917 | 27,255,359 | 9,312,878 | 913,864 | 30,976 |
+| `adaptive:fixed:ptmalloc` | 30,911,002 | 22,033,402 | 9,144,963 | 783,634 | 30,976 |
+| `adaptive:fixed:tcmalloc_like` | 10,988,521 | 14,569,214 | 8,802,991 | 860,718 | 30,976 |
+| `adaptive:fixed:jemalloc_like` | 32,355,493 | 31,322,763 | 10,648,904 | 1,039,885 | 30,976 |
+| `adaptive:fixed:mimalloc_like` | 38,295,117 | 39,165,333 | 12,100,290 | 1,115,162 | 30,976 |
+
+Stress-focused samples:
+
+| Strategy / policy | `cross_thread_free` ops/sec | `fragmentation` ops/sec |
 |---|---:|---:|
-| `hybrid` | 46,491,224 | 1,601,083 |
-| `ptmalloc` | 51,542,608 | 1,817,504 |
-| `tcmalloc_like` | 47,214,679 | 1,648,257 |
-| `jemalloc_like` | 47,075,882 | 1,586,139 |
-| `mimalloc_like` | 37,858,449 | 1,468,391 |
-| `adaptive` | 34,700,041 | 1,494,825 |
-| `libc` | 9,305,140 | 1,114,380 |
+| `libc` | 1,521,286 | 177,916 |
+| `hybrid` | 1,815,925 | 253,852 |
+| `ptmalloc` | 929,072 | 301,377 |
+| `tcmalloc_like` | 883,058 | 326,952 |
+| `jemalloc_like` | 1,709,303 | 336,961 |
+| `mimalloc_like` | 2,075,647 | 203,278 |
+| `adaptive:heuristic` | 1,536,604 | 267,972 |
+| `adaptive:bandit` | 1,623,024 | not run |
+| `adaptive:fixed:tcmalloc_like` | 1,151,861 | not run |
+| `adaptive:fixed:jemalloc_like` | 1,347,910 | not run |
+| `adaptive:fixed:mimalloc_like` | 1,113,186 | not run |
 
-Short cross-thread sample, 4 threads and 2000 objects per producer:
+Interpretation:
 
-| Strategy | `cross_thread_free` ops/sec |
-|---|---:|
-| `hybrid` | 1,450,530 |
-| `ptmalloc` | 1,696,853 |
-| `tcmalloc_like` | 1,663,801 |
-| `jemalloc_like` | 1,585,654 |
-| `mimalloc_like` | 1,657,117 |
-| `adaptive` | 1,543,815 |
-| `libc` | 1,635,834 |
-
-These are smoke numbers, not final claims. They confirm the modes are runnable and benchmarkable; repeated runs and external workloads are still needed before drawing strong conclusions.
+- Against `libc`, the teaching allocators are faster on this micro matrix, but that does not imply production superiority.
+- `mimalloc_like` is strongest on this cross-thread sample, which matches its owner/remote-free design goal.
+- The current default adaptive heuristic is not best-in-class on these tests. It is a configurable decision module baseline, not an optimized learned policy.
+- `fixed:mimalloc_like` wins this micro matrix, while `jemalloc_like` and `tcmalloc_like` are stronger on the fragmentation sample. This confirms why adaptive needs workload signals and feedback rather than a single static size table.
+- `round_robin` performs poorly on same-size hot paths because it deliberately mixes incompatible implementation choices. It is useful as a stress policy, not as an optimization policy.
 
 External `mimalloc-bench glibc-simple` was also run through LD_PRELOAD for all modes:
 

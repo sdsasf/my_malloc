@@ -28,7 +28,7 @@ Main features:
 | tcmalloc-like path | size classes up to 4096B, thread caches, central free lists, 64KB spans |
 | jemalloc-like path | multiple arenas, arena-local runs, per-thread tcache, size-class refill |
 | mimalloc-like path | per-thread heaps, page ownership, remote-free queues |
-| adaptive path | simple size-based dispatch across mimalloc-like, tcmalloc-like, and direct mmap paths |
+| adaptive policy | configurable runtime decision module over all concrete allocator implementations |
 | Learning tools | heap inspector, statistics, trace option, strategy API, plugin example |
 | Benchmarks | built-in configurable benchmark runner plus external `mimalloc-bench`, Redis, and real-application smoke hooks |
 
@@ -43,24 +43,21 @@ malloc/free/realloc hooks
   v
 my_malloc public API
   |
-  +-- hybrid small-object frontend
-  |      |
-  |      +-- thread-local slab lists
-  |      +-- central class caches
-  |      +-- 64KB slab lookup table
+runtime allocator dispatcher
   |
-  +-- ptmalloc-style fallback
+  +-- fixed implementation mode
+  |      +-- hybrid
+  |      +-- ptmalloc
+  |      +-- tcmalloc_like
+  |      +-- jemalloc_like
+  |      +-- mimalloc_like
+  |
+  +-- adaptive selection policy
          |
-         +-- tcache
-         +-- fastbins
-         +-- small bins
-         +-- unsorted bin
-         +-- large bins + binmap
-         +-- top chunk
-         +-- mmap / heap growth
+         +-- choose one concrete implementation by size/workload policy
 ```
 
-For the detailed design, read [docs/allocator_design.md](docs/allocator_design.md).
+For the detailed system architecture, read [docs/system_architecture.md](docs/system_architecture.md).
 
 ## Build
 
@@ -94,6 +91,10 @@ Validate allocator strategies:
 ```bash
 ./build/allocator_validate --strategy hybrid
 ./build/allocator_validate --strategy ptmalloc
+./build/allocator_validate --strategy tcmalloc_like
+./build/allocator_validate --strategy jemalloc_like
+./build/allocator_validate --strategy mimalloc_like
+./build/allocator_validate --strategy adaptive
 ./build/allocator_validate --strategy libc
 ```
 
@@ -102,6 +103,10 @@ Run with `LD_PRELOAD`:
 ```bash
 LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=hybrid ./build/test_basic
 LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=ptmalloc ./build/test_basic
+LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=tcmalloc_like ./build/test_basic
+LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=jemalloc_like ./build/test_basic
+LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=mimalloc_like ./build/test_basic
+LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=adaptive ./build/test_basic
 ```
 
 ## Use As A Drop-in Allocator
@@ -119,6 +124,7 @@ MY_MALLOC_MODE=tcmalloc_like LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 MY_MALLOC_MODE=jemalloc_like LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 MY_MALLOC_MODE=mimalloc_like LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 MY_MALLOC_MODE=adaptive LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
+MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_POLICY=bandit LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 ```
 
 Enable optional observability:
@@ -193,16 +199,15 @@ Full benchmark instructions and current results:
 
 | Document | Read this for |
 |---|---|
-| [docs/allocator_design.md](docs/allocator_design.md) | Overall system architecture, data structure relationships, allocation/free/realloc paths |
-| [docs/allocator_families.md](docs/allocator_families.md) | Detailed allocator principles: ptmalloc, tcmalloc, jemalloc, mimalloc, and how this project maps to them |
-| [docs/ptmalloc_design.md](docs/ptmalloc_design.md) | ptmalloc-style implementation details and simplifications |
-| [docs/tcmalloc_design.md](docs/tcmalloc_design.md) | tcmalloc-like size-class/span implementation |
-| [docs/jemalloc_design.md](docs/jemalloc_design.md) | jemalloc-like arena/run implementation |
-| [docs/mimalloc_design.md](docs/mimalloc_design.md) | mimalloc-like page ownership and remote-free implementation |
-| [docs/adaptive_allocator.md](docs/adaptive_allocator.md) | Current adaptive mode and future policy directions |
-| [docs/allocator_lab.md](docs/allocator_lab.md) | How to add custom allocator strategies and compare them in the same benchmark harness |
-| [docs/benchmarking.md](docs/benchmarking.md) | Benchmark methodology and commands |
-| [docs/external_benchmark_results.md](docs/external_benchmark_results.md) | Current performance observations |
+| [docs/system_architecture.md](docs/system_architecture.md) | Overall system layers: API, dispatcher, concrete allocators, adaptive policy, ownership rules |
+| [docs/ptmalloc_design.md](docs/ptmalloc_design.md) | ptmalloc-style allocator: chunk/tcache/bin/arena implementation and simplifications |
+| [docs/tcmalloc_design.md](docs/tcmalloc_design.md) | tcmalloc-like allocator: size classes, thread cache, central lists, spans |
+| [docs/jemalloc_design.md](docs/jemalloc_design.md) | jemalloc-like allocator: arenas, runs, tcache |
+| [docs/mimalloc_design.md](docs/mimalloc_design.md) | mimalloc-like allocator: per-thread heaps, page ownership, remote-free queues |
+| [docs/adaptive_allocator.md](docs/adaptive_allocator.md) | Adaptive decision module: heuristic, round-robin, bandit, fixed, ML/RL/LLM extension points |
+| [docs/allocator_lab.md](docs/allocator_lab.md) | Custom allocator strategy/plugin API and validation workflow |
+| [docs/benchmarking.md](docs/benchmarking.md) | Benchmark methodology, commands, smoke results |
+| [docs/external_benchmark_results.md](docs/external_benchmark_results.md) | External benchmark run notes and environment blockers |
 
 ## Current Performance Snapshot
 
@@ -230,5 +235,5 @@ The results are useful for learning because they expose concrete design tradeoff
 - Cross-thread slab frees do not yet use owner-thread remote-free queues.
 - The size-class table is simple 16-byte spacing, not a production-tuned table.
 - Large allocation and extent management are simpler than jemalloc/tcmalloc/mimalloc.
-- Adaptive strategy selection currently uses a simple size-based rule, not a learned online policy.
+- Adaptive strategy selection is a policy layer over all concrete implementations. Current policies include `heuristic`, `round_robin`, `bandit`, and `fixed:<impl>`; ML, LLM, and RL policies are documented extension points.
 - External benchmark coverage depends on local tools such as Redis, glibc benchtests, SQLite, clang, Z3, jemalloc, tcmalloc, and mimalloc.

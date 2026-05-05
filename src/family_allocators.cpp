@@ -18,6 +18,7 @@ constexpr size_t CLASS_STEP = 16;
 constexpr size_t MAX_SMALL = 4096;
 constexpr size_t CLASS_COUNT = MAX_SMALL / CLASS_STEP;
 constexpr size_t TABLE_SIZE = 32768;
+constexpr size_t LARGE_TABLE_SIZE = 4096;
 constexpr size_t REFILL_BATCH = 32;
 constexpr size_t DRAIN_BATCH = 64;
 constexpr size_t LOCAL_LIMIT = 128;
@@ -60,6 +61,11 @@ struct PageTableEntry {
     std::atomic<PageHeader*> page;
 };
 
+struct LargeTableEntry {
+    std::atomic<void*> ptr;
+    std::atomic<LargeHeader*> header;
+};
+
 struct alignas(64) CentralClass {
     pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
     FreeObj* list = nullptr;
@@ -91,6 +97,8 @@ std::atomic<uint32_t> next_heap_id{1};
 std::atomic<size_t> next_arena{0};
 pthread_mutex_t table_lock = PTHREAD_MUTEX_INITIALIZER;
 PageTableEntry page_table[TABLE_SIZE]{};
+pthread_mutex_t large_table_lock = PTHREAD_MUTEX_INITIALIZER;
+LargeTableEntry large_table[LARGE_TABLE_SIZE]{};
 CentralClass tc_central[CLASS_COUNT]{};
 JemallocArena je_arenas[JEMALLOC_ARENAS]{};
 
@@ -141,9 +149,52 @@ void table_insert(void* base, PageHeader* page) noexcept {
     return nullptr;
 }
 
-[[nodiscard]] LargeHeader* large_header(void* ptr) noexcept {
-    auto* h = reinterpret_cast<LargeHeader*>(ptr) - 1;
-    return h->magic == LARGE_MAGIC ? h : nullptr;
+[[nodiscard]] inline size_t large_table_index(void* ptr) noexcept {
+    return (reinterpret_cast<uintptr_t>(ptr) >> 4) & (LARGE_TABLE_SIZE - 1);
+}
+
+void large_table_insert(void* ptr, LargeHeader* header) noexcept {
+    pthread_mutex_lock(&large_table_lock);
+    size_t idx = large_table_index(ptr);
+    for (size_t n = 0; n < LARGE_TABLE_SIZE; ++n) {
+        LargeTableEntry& e = large_table[(idx + n) & (LARGE_TABLE_SIZE - 1)];
+        void* cur = e.ptr.load(std::memory_order_acquire);
+        if (!cur || cur == ptr) {
+            e.header.store(header, std::memory_order_release);
+            e.ptr.store(ptr, std::memory_order_release);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&large_table_lock);
+}
+
+[[nodiscard]] LargeHeader* large_table_lookup(void* ptr) noexcept {
+    size_t idx = large_table_index(ptr);
+    for (size_t n = 0; n < LARGE_TABLE_SIZE; ++n) {
+        LargeTableEntry& e = large_table[(idx + n) & (LARGE_TABLE_SIZE - 1)];
+        void* cur = e.ptr.load(std::memory_order_acquire);
+        if (!cur) return nullptr;
+        if (cur == ptr) {
+            LargeHeader* h = e.header.load(std::memory_order_acquire);
+            return h && h->magic == LARGE_MAGIC ? h : nullptr;
+        }
+    }
+    return nullptr;
+}
+
+void large_table_remove(void* ptr) noexcept {
+    pthread_mutex_lock(&large_table_lock);
+    size_t idx = large_table_index(ptr);
+    for (size_t n = 0; n < LARGE_TABLE_SIZE; ++n) {
+        LargeTableEntry& e = large_table[(idx + n) & (LARGE_TABLE_SIZE - 1)];
+        void* cur = e.ptr.load(std::memory_order_acquire);
+        if (!cur) break;
+        if (cur == ptr) {
+            e.header.store(nullptr, std::memory_order_release);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&large_table_lock);
 }
 
 void push_list(FreeObj*& list, size_t& count, FreeObj* head, FreeObj* tail, size_t n) noexcept {
@@ -250,13 +301,16 @@ void central_push(size_t idx, FreeObj* head, FreeObj* tail, size_t n) noexcept {
     h->mapping = raw;
     h->mapping_size = map_size;
     h->usable_size = size;
-    return reinterpret_cast<void*>(user);
+    void* ptr = reinterpret_cast<void*>(user);
+    large_table_insert(ptr, h);
+    return ptr;
 }
 
-void large_free(LargeHeader* h) noexcept {
+void large_free(void* ptr, LargeHeader* h) noexcept {
     void* mapping = h->mapping;
     size_t mapping_size = h->mapping_size;
     h->magic = 0;
+    large_table_remove(ptr);
     ::munmap(mapping, mapping_size);
 }
 
@@ -413,16 +467,10 @@ void* mimalloc_like_malloc(size_t size) noexcept {
     return pop_list(mi_local[idx], mi_count[idx]);
 }
 
-void* adaptive_malloc(size_t size) noexcept {
-    if (size <= 256) return mimalloc_like_malloc(size);
-    if (size <= MAX_SMALL) return tcmalloc_like_malloc(size);
-    return large_alloc(size);
-}
-
 bool family_free(void* ptr) noexcept {
     if (!ptr) return true;
-    if (LargeHeader* h = large_header(ptr)) {
-        large_free(h);
+    if (LargeHeader* h = large_table_lookup(ptr)) {
+        large_free(ptr, h);
         return true;
     }
     PageHeader* page = page_lookup(ptr);
@@ -461,7 +509,7 @@ bool family_free(void* ptr) noexcept {
 }
 
 void* family_realloc(void* ptr, size_t size) noexcept {
-    if (!ptr) return adaptive_malloc(size);
+    if (!ptr) return tcmalloc_like_malloc(size);
     if (size == 0) {
         (void)family_free(ptr);
         return nullptr;
@@ -485,13 +533,13 @@ void* family_realloc(void* ptr, size_t size) noexcept {
 
 size_t family_usable_size(void* ptr) noexcept {
     if (!ptr) return 0;
-    if (LargeHeader* h = large_header(ptr)) return h->usable_size;
+    if (LargeHeader* h = large_table_lookup(ptr)) return h->usable_size;
     PageHeader* page = page_lookup(ptr);
     return page ? page->object_size : 0;
 }
 
 void* family_memalign(size_t alignment, size_t size) noexcept {
-    if (alignment <= MALLOC_ALIGNMENT) return adaptive_malloc(size);
+    if (alignment <= MALLOC_ALIGNMENT) return tcmalloc_like_malloc(size);
     if (alignment & (alignment - 1)) return nullptr;
     return large_alloc(size, alignment);
 }

@@ -153,7 +153,7 @@ StrategyDescriptor adaptive_strategy_descriptor() noexcept {
     return StrategyDescriptor{
         STRATEGY_API_VERSION,
         "adaptive",
-        "Teaching adaptive mode: mimalloc-like tiny objects, tcmalloc-like small objects, direct mmap large objects",
+        "Adaptive selection policy over concrete teaching allocator implementations",
         StrategyVTable{
             adaptive_init,
             noop_shutdown,

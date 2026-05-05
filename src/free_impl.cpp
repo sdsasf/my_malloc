@@ -8,6 +8,7 @@
 #include "my_ptmalloc/observer.h"
 #include "my_ptmalloc/slab_allocator.h"
 #include "my_ptmalloc/family_allocators.h"
+#include "my_ptmalloc/runtime_allocator.h"
 #include "my_ptmalloc/allocator_lab.h"
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/types.h"
@@ -91,11 +92,7 @@ static void consolidate_and_free(Arena& arena, Chunk* p) noexcept {
 void my_free(void* ptr) noexcept {
     if (!ptr) return;
 
-    AllocMode mode = allocator_mode();
-    if ((mode == AllocMode::TcmallocLike ||
-         mode == AllocMode::JemallocLike ||
-         mode == AllocMode::MimallocLike ||
-         mode == AllocMode::Adaptive) && family_free(ptr)) {
+    if (runtime_mode_uses_family_allocators() && family_free(ptr)) {
         if (allocator_stats_enabled_fast()) stats_record_free(AllocPath::Slab);
         if (allocator_trace_enabled_fast()) trace_record(AllocOp::Free, AllocPath::Slab, 0, ptr);
         return;

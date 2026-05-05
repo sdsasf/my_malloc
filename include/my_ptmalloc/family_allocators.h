@@ -8,7 +8,6 @@ namespace my_ptmalloc {
 [[nodiscard]] void* tcmalloc_like_malloc(size_t size) noexcept;
 [[nodiscard]] void* jemalloc_like_malloc(size_t size) noexcept;
 [[nodiscard]] void* mimalloc_like_malloc(size_t size) noexcept;
-[[nodiscard]] void* adaptive_malloc(size_t size) noexcept;
 
 [[nodiscard]] bool family_free(void* ptr) noexcept;
 [[nodiscard]] void* family_realloc(void* ptr, size_t size) noexcept;

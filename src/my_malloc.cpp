@@ -6,6 +6,7 @@
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/slab_allocator.h"
 #include "my_ptmalloc/family_allocators.h"
+#include "my_ptmalloc/runtime_allocator.h"
 #include "my_ptmalloc/allocator_lab.h"
 #include <cstring>
 #include <new>
@@ -44,12 +45,13 @@ void* my_memalign(size_t alignment, size_t size) noexcept {
     if (alignment < MALLOC_ALIGNMENT) alignment = MALLOC_ALIGNMENT;
     if (alignment <= MALLOC_ALIGNMENT) return my_malloc(size);
 
-    AllocMode mode = allocator_mode();
-    if (mode == AllocMode::TcmallocLike ||
-        mode == AllocMode::JemallocLike ||
-        mode == AllocMode::MimallocLike ||
-        mode == AllocMode::Adaptive) {
-        return family_memalign(alignment, size);
+    if (runtime_mode_uses_family_allocators()) {
+        RuntimeAllocatorKind impl = runtime_select_allocator(size);
+        if (impl == RuntimeAllocatorKind::TcmallocLike ||
+            impl == RuntimeAllocatorKind::JemallocLike ||
+            impl == RuntimeAllocatorKind::MimallocLike) {
+            return family_memalign(alignment, size);
+        }
     }
 
     size_t nb = request2size(UserSize{size}).value;
@@ -148,11 +150,7 @@ int my_mallopt(int param, int value) noexcept {
 
 size_t my_malloc_usable_size(void* ptr) noexcept {
     if (!ptr) return 0;
-    AllocMode mode = allocator_mode();
-    if (mode == AllocMode::TcmallocLike ||
-        mode == AllocMode::JemallocLike ||
-        mode == AllocMode::MimallocLike ||
-        mode == AllocMode::Adaptive) {
+    if (runtime_mode_uses_family_allocators()) {
         size_t family_usable = family_usable_size(ptr);
         if (family_usable != 0) return family_usable;
     }

@@ -8,6 +8,7 @@
 #include "my_ptmalloc/heap.h"
 #include "my_ptmalloc/slab_allocator.h"
 #include "my_ptmalloc/family_allocators.h"
+#include "my_ptmalloc/runtime_allocator.h"
 #include "my_ptmalloc/allocator_lab.h"
 #include "my_ptmalloc/types.h"
 #include <cstring>
@@ -48,11 +49,7 @@ void* my_realloc(void* ptr, size_t size) noexcept {
         return nullptr;
     }
 
-    AllocMode mode = allocator_mode();
-    if (mode == AllocMode::TcmallocLike ||
-        mode == AllocMode::JemallocLike ||
-        mode == AllocMode::MimallocLike ||
-        mode == AllocMode::Adaptive) {
+    if (runtime_mode_uses_family_allocators()) {
         size_t family_usable = family_usable_size(ptr);
         if (family_usable != 0) {
             void* result = family_realloc(ptr, size);
