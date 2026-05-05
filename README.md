@@ -51,6 +51,14 @@ A C++17 hybrid memory allocator. It keeps a ptmalloc-style arena/bin fallback fo
 └─────────────────────────────────────────────────────┘
 ```
 
+## Learning Documents
+
+| Document | Focus |
+|----------|-------|
+| [docs/allocator_design.md](docs/allocator_design.md) | Concrete system design: slab layout, chunk layout, arena/bin relationships, allocation/free/realloc paths, and implemented optimizations. |
+| [docs/allocator_families.md](docs/allocator_families.md) | Allocator-family guide: ptmalloc, tcmalloc-like slab allocation, jemalloc-like extent ideas, mimalloc-like remote-free ideas, adaptive direction, and what this project implements or simplifies. |
+| [docs/allocator_lab.md](docs/allocator_lab.md) | Lab guide: strategy API, external plugins, validation, benchmarking, JSON output, and how to add custom strategies. |
+
 ### Allocation Flow
 
 1. **Slab fast path** -- normal allocations up to 1024 bytes use fixed-size slab objects and bypass chunk headers
@@ -249,7 +257,11 @@ This version implements the planned hot-path optimizations:
 - Thread-local slab caches refill in batches from central lists and drain surplus objects back to central lists.
 - Debug validation and `fprintf` calls in hot code are behind `MY_PTMALLOC_ENABLE_DEBUG`.
 
-See [docs/allocator_design.md](docs/allocator_design.md) for the allocator implementation design, and [docs/allocator_lab.md](docs/allocator_lab.md) for the learning-oriented strategy/plugin/benchmark guide.
+See:
+
+- [docs/allocator_design.md](docs/allocator_design.md) for the concrete internal data structures and allocation/free paths.
+- [docs/allocator_families.md](docs/allocator_families.md) for ptmalloc, tcmalloc-like slab, jemalloc-like, mimalloc-like, adaptive, and plugin strategy principles, including what this project implements and simplifies.
+- [docs/allocator_lab.md](docs/allocator_lab.md) for the learning-oriented strategy/plugin/validation/benchmark guide.
 
 ## Project Structure
 
@@ -257,6 +269,10 @@ See [docs/allocator_design.md](docs/allocator_design.md) for the allocator imple
 my_ptmalloc/
 ├── CMakeLists.txt
 ├── README.md
+├── docs/
+│   ├── allocator_design.md       # Concrete current implementation design
+│   ├── allocator_families.md     # Allocator-family principles and project tradeoffs
+│   └── allocator_lab.md          # Strategy/plugin/benchmark learning guide
 ├── include/my_ptmalloc/
 │   ├── config.h              # Platform constants (constexpr)
 │   ├── types.h               # Strong types: ChunkSize, UserSize, BinIndex
@@ -275,6 +291,9 @@ my_ptmalloc/
 │   ├── threshold.h           # Adaptive mmap/trim thresholds
 │   ├── coalesce.h            # Configurable coalescing policy
 │   ├── observer.h            # AllocObserver for stats/debug
+│   ├── allocator_lab.h       # Optional stats and trace API
+│   ├── slab_allocator.h      # Headerless small-object slab allocator
+│   ├── strategy.h            # Pluggable strategy API
 │   ├── thread_registry.h     # Thread lifecycle management
 │   ├── arena_manager.h       # Arena creation/selection
 │   ├── alloc_pipeline.h      # Chain-of-responsibility allocation
@@ -282,16 +301,9 @@ my_ptmalloc/
 │   └── hooks.h               # LD_PRELOAD C linkage
 ├── src/
 │   ├── init.cpp              # Global initialization
-│   ├── chunk.cpp             # Chunk methods
-│   ├── intrusive_list.cpp    # List operations
-│   ├── fastbins.cpp          # CAS-based fastbin ops
-│   ├── small_bins.cpp        # Small bin ops
 │   ├── large_bins.cpp        # Large bin best-fit search
 │   ├── unsorted_bin.cpp      # Unsorted bin scan + sort
-│   ├── bin_map.cpp           # Bitmap scan
-│   ├── bin_manager.cpp       # Bin facade
 │   ├── tcache.cpp            # Tcache lifecycle
-│   ├── arena.cpp             # Arena lifecycle
 │   ├── heap.cpp              # Heap allocation (mmap-based)
 │   ├── sys_memory.cpp        # MmapMemory implementation
 │   ├── threshold.cpp         # Adaptive thresholds
@@ -303,9 +315,14 @@ my_ptmalloc/
 │   ├── malloc_impl.cpp       # _int_malloc
 │   ├── free_impl.cpp         # _int_free with consolidation
 │   ├── realloc_impl.cpp      # _int_realloc
+│   ├── slab_allocator.cpp    # Slab frontend and central per-class cache
+│   ├── allocator_lab.cpp     # Opt-in stats and trace implementation
+│   ├── strategy.cpp          # Built-in strategy descriptors
 │   ├── consolidate.cpp       # malloc_consolidate + systrim
 │   ├── hooks.cpp             # LD_PRELOAD interposition
 │   └── my_malloc.cpp         # Public API wrappers
+├── plugins/
+│   └── counting_malloc_strategy.cpp # Example external strategy plugin
 ├── test/
 │   ├── test_basic.cpp        # Unit tests
 │   ├── test_tcache.cpp       # Tcache tests
@@ -313,7 +330,10 @@ my_ptmalloc/
 │   ├── test_perf.cpp         # Internal perf benchmark
 │   └── bench_compare.cpp     # glibc vs my_ptmalloc comparison
 └── tools/
-    └── heap_inspect.cpp      # Heap state inspection
+    ├── heap_inspect.cpp      # Heap state inspection
+    ├── allocator_validate.cpp # Strategy correctness validator
+    ├── bench_runner.cpp      # Standard strategy benchmark runner
+    └── strategy_loader.h     # Built-in/plugin strategy loader
 ```
 
 ## Design Decisions

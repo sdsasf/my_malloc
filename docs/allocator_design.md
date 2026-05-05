@@ -2,6 +2,8 @@
 
 This document explains the current hybrid allocator architecture, the relationships between the major data structures, and the optimized allocation/free paths. It is written as a system design document rather than a line-by-line source tour.
 
+For allocator-family theory, including ptmalloc, tcmalloc-like slab allocation, jemalloc-like extent ideas, mimalloc-like remote-free ideas, and which parts are implemented or simplified in this project, see [allocator_families.md](allocator_families.md).
+
 ## 1. Design Goals
 
 `my_ptmalloc` started as a compact C++17 reimplementation of the main ptmalloc ideas used by glibc malloc. It now uses a hybrid design:

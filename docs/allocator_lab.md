@@ -4,6 +4,8 @@ This project is now structured as a learning-oriented allocator laboratory. It c
 
 The goal is not to claim full jemalloc/tcmalloc/mimalloc compatibility. The goal is to expose their important ideas as experimental modes and make those ideas measurable.
 
+For a more detailed explanation of each allocator family, the features implemented by this project, and the simplifications made for learning, read [allocator_families.md](allocator_families.md).
+
 ## 1. Quick Start
 
 Build everything:
