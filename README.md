@@ -58,7 +58,8 @@ A C++17 hybrid memory allocator. It keeps a ptmalloc-style arena/bin fallback fo
 | [docs/allocator_design.md](docs/allocator_design.md) | Concrete system design: slab layout, chunk layout, arena/bin relationships, allocation/free/realloc paths, and implemented optimizations. |
 | [docs/allocator_families.md](docs/allocator_families.md) | Allocator-family guide: ptmalloc, tcmalloc-like slab allocation, jemalloc-like extent ideas, mimalloc-like remote-free ideas, adaptive direction, and what this project implements or simplifies. |
 | [docs/allocator_lab.md](docs/allocator_lab.md) | Lab guide: strategy API, external plugins, validation, benchmarking, JSON output, and how to add custom strategies. |
-| [docs/benchmarking.md](docs/benchmarking.md) | Configurable benchmark guide: profiles, individual benchmark methods, parameters, JSON output, and external suites such as mimalloc-bench. |
+| [docs/benchmarking.md](docs/benchmarking.md) | Configurable benchmark guide: profiles, individual benchmark methods, parameters, JSON output, and external suites such as mimalloc-bench/glibc benchtests/real apps. |
+| [docs/external_benchmark_results.md](docs/external_benchmark_results.md) | Current external benchmark run notes, including mimalloc-bench results, skipped tests, environment blockers, and next fix targets. |
 
 ### Allocation Flow
 
@@ -190,6 +191,15 @@ Run configurable benchmark profiles:
 ./build/bench_runner --strategy hybrid --bench fragmentation --iters 100000 --slots 4096
 ```
 
+Set up external benchmark suites:
+
+```bash
+scripts/external_bench.sh setup-mimalloc-bench
+scripts/external_bench.sh build-mimalloc-bench bench
+scripts/external_bench.sh run-mimalloc-bench larson alloc-test cscratch
+scripts/external_bench.sh run-real-apps
+```
+
 Build and run the example plugin:
 
 ```bash
@@ -284,7 +294,8 @@ my_ptmalloc/
 │   ├── allocator_design.md       # Concrete current implementation design
 │   ├── allocator_families.md     # Allocator-family principles and project tradeoffs
 │   ├── allocator_lab.md          # Strategy/plugin/benchmark learning guide
-│   └── benchmarking.md           # Configurable benchmark guide
+│   ├── benchmarking.md           # Configurable benchmark guide
+│   └── external_benchmark_results.md # External benchmark run notes
 ├── include/my_ptmalloc/
 │   ├── config.h              # Platform constants (constexpr)
 │   ├── types.h               # Strong types: ChunkSize, UserSize, BinIndex
@@ -335,6 +346,12 @@ my_ptmalloc/
 │   └── my_malloc.cpp         # Public API wrappers
 ├── plugins/
 │   └── counting_malloc_strategy.cpp # Example external strategy plugin
+├── scripts/
+│   └── external_bench.sh # External benchmark suite integration
+├── external/
+│   └── .gitignore        # Downloaded external benchmarks live here
+├── results/
+│   └── .gitignore        # Timestamped benchmark logs live here
 ├── test/
 │   ├── test_basic.cpp        # Unit tests
 │   ├── test_tcache.cpp       # Tcache tests

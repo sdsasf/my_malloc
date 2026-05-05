@@ -177,6 +177,21 @@ These runs expose different failure modes:
 
 ## 8. External Benchmark Suites
 
+The project provides a helper script for external benchmarks:
+
+```bash
+scripts/external_bench.sh --help
+```
+
+External benchmark artifacts are kept outside the tracked source tree:
+
+```text
+external/          downloaded external benchmark repositories
+results/external/  timestamped benchmark logs
+```
+
+Both directories are ignored by Git except for their `.gitignore` placeholders.
+
 ### mimalloc-bench
 
 `mimalloc-bench` is a practical allocator benchmark suite used by the mimalloc project. It collects classic allocator tests and application-like workloads including Larson-style server workloads, alloc-test, cache-scratch, xmalloc-test, cfrac, espresso, lean, and z3.
@@ -190,18 +205,18 @@ https://github.com/daanx/mimalloc-bench
 Typical flow:
 
 ```bash
-git clone https://github.com/daanx/mimalloc-bench
-cd mimalloc-bench
-./build-bench-env.sh all
-cd out/bench
-../../bench.sh sys larson
+scripts/external_bench.sh setup-mimalloc-bench
+scripts/external_bench.sh build-mimalloc-bench bench
+scripts/external_bench.sh run-mimalloc-bench larson alloc-test cscratch
 ```
 
-To test this project, preload the shared library into benchmarks that use the system malloc API:
+The runner executes each selected mimalloc-bench test with:
 
-```bash
-LD_PRELOAD=/absolute/path/to/build/libmy_ptmalloc.so ../../bench.sh sys larson
-```
+- glibc system malloc;
+- this project in default `MY_MALLOC_MODE=hybrid`;
+- this project in `MY_MALLOC_MODE=ptmalloc`.
+
+Logs are written to `results/external/`.
 
 When using external suites, compare against at least:
 
@@ -212,9 +227,31 @@ When using external suites, compare against at least:
 - this project in default `hybrid` mode;
 - this project in `MY_MALLOC_MODE=ptmalloc` mode.
 
+`build-mimalloc-bench all` can download and build more allocators and benchmark programs, but it may need many packages and significantly more time:
+
+```bash
+scripts/external_bench.sh build-mimalloc-bench all
+```
+
+If the official `mimalloc-bench` build is blocked by missing local tools such as `unzip`, the helper script falls back to a local CMake build of the core benchmark binaries. In that fallback, shbench binaries are stubs and should not be reported; use core tests such as `larson`, `alloc-test`, `cscratch`, `xmalloc-test`, `glibc-simple`, and `glibc-thread`.
+
 ### glibc benchtests
 
 glibc has its own `benchtests`, including malloc/tcache hot-path tests. These are useful for studying ptmalloc-like behavior and tcache fast paths, but they are not a complete cross-allocator benchmark suite.
+
+This project does not vendor glibc. Point the script at an existing glibc source/build tree:
+
+```bash
+GLIBC_SRC=/path/to/glibc scripts/external_bench.sh run-glibc-benchtests "$GLIBC_SRC"
+```
+
+You can also name specific malloc benchtests:
+
+```bash
+GLIBC_SRC=/path/to/glibc scripts/external_bench.sh run-glibc-benchtests "$GLIBC_SRC" malloc-thread malloc-simple malloc-tcache
+```
+
+The script runs each available benchtest once with glibc, once with this project in hybrid mode, and once with this project in ptmalloc mode. Missing benchtest names are reported and skipped because glibc benchtest names differ by version.
 
 ### Real Application Workloads
 
@@ -225,6 +262,39 @@ Allocator microbenchmarks are easy to overfit. Add real programs when possible:
 - clang or another compiler workload;
 - Lua, Python, or Z3 for application-like allocation patterns;
 - producer/consumer services to test cross-thread frees.
+
+The helper script includes smoke workloads for locally installed tools:
+
+```bash
+scripts/external_bench.sh run-real-apps
+```
+
+It currently checks:
+
+| Tool | Workload |
+|---|---|
+| `sqlite3` | In-memory insert/select workload. |
+| `clang++` | Syntax-check this project's `bench_runner.cpp`. |
+| `lua` | Build a large table of strings. |
+| `z3` | Solve a tiny SMT input through stdin. |
+| `redis-server` | Detection only; use `redis-benchmark` in a prepared Redis setup. |
+
+Missing tools are skipped and recorded in the log.
+
+### Run All Available External Tests
+
+```bash
+scripts/external_bench.sh run-all
+```
+
+`run-all` does the following:
+
+1. Clone or update `mimalloc-bench`.
+2. Run mimalloc-bench if `external/mimalloc-bench/out/bench` already exists.
+3. Run glibc benchtests if `GLIBC_SRC` is set.
+4. Run real-application smoke workloads for installed tools.
+
+This command intentionally does not auto-build the full mimalloc-bench environment because that can install/download a large dependency set and may require system packages.
 
 ## 9. Reporting Rules
 
