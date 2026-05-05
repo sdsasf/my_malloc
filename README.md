@@ -16,6 +16,7 @@ A C++17 hybrid memory allocator. It keeps a ptmalloc-style arena/bin fallback fo
 - **Strong types** -- `ChunkSize`, `UserSize`, `FastbinIdx`, etc. with `constexpr` index computation
 - **LD_PRELOAD hooks** -- full C-linkage `malloc`/`free`/`calloc`/`realloc`/`memalign`/`posix_memalign`/`aligned_alloc`/`mallopt`/`malloc_usable_size`
 - **Bootstrap buffer** -- static per-thread buffers for pre-init allocations before `dlsym` resolves
+- **Allocator lab controls** -- runtime backend selection with `MY_MALLOC_MODE`, opt-in stats with `MY_MALLOC_STATS=1`, and optional trace ring with `MY_MALLOC_TRACE=1`
 - **Debug gating** -- hot-path metadata checks and stderr logging are compiled out unless `MY_PTMALLOC_ENABLE_DEBUG=1` is defined
 
 ## Architecture
@@ -131,6 +132,30 @@ my_ptmalloc::my_mallopt(M_MMAP_THRESHOLD, 131072);
 my_ptmalloc::my_mallopt(M_TRIM_THRESHOLD, 128 * 1024);
 ```
 
+### Allocator Lab Controls
+
+```bash
+# Default: hybrid slab + ptmalloc-style fallback
+./build/bench_my
+
+# Baseline: disable the slab frontend and use the ptmalloc-style path
+MY_MALLOC_MODE=ptmalloc ./build/bench_my
+
+# Opt into counters; disabled by default to keep hot paths fast
+MY_MALLOC_STATS=1 ./build/test_basic
+
+# Enable the trace ring; also enables stats
+MY_MALLOC_TRACE=1 ./build/test_basic
+```
+
+Programmatic stats API:
+
+```cpp
+auto stats = my_ptmalloc::my_malloc_stats_snapshot();
+my_ptmalloc::my_malloc_dump_stats_json(stdout);
+my_ptmalloc::my_malloc_stats_reset();
+```
+
 ## Benchmark Results
 
 Tested on Linux x86_64, `-O2 -march=native`, on May 4, 2026. Each benchmark runs identical workloads against both allocators. Ratios are my_ptmalloc / glibc for throughput (higher is better).
@@ -139,33 +164,50 @@ Tested on Linux x86_64, `-O2 -march=native`, on May 4, 2026. Each benchmark runs
 
 | Benchmark | glibc malloc | my_ptmalloc | Ratio |
 |-----------|-------------|-------------|-------|
-| Same-size 32B (10M alloc+free) | 57,442,425 | 52,016,334 | 0.91x |
-| Same-size 64B (10M alloc+free) | 50,515,605 | 48,998,999 | 0.97x |
-| Same-size 256B (10M alloc+free) | 21,731,226 | 32,412,009 | 1.49x |
-| Batch 512x1000 (512k alloc+free) | 15,013,529 | 31,124,535 | 2.07x |
-| Random alloc/free/realloc (200k) | 1,984,153 | 1,031,687 | 0.52x |
-| Large 8-128KB (30k alloc+free) | 108,285 | 222,857 | 2.06x |
-| Fragmentation (5k reallocs) | 21,488,740 | 9,328,898 | 0.43x |
-| Multi-thread 4x50k (200k total) | 1,907,424 | 2,614,695 | 1.37x |
+| Same-size 32B (10M alloc+free) | 55,987,979 | 59,176,399 | 1.06x |
+| Same-size 64B (10M alloc+free) | 46,724,193 | 49,816,401 | 1.07x |
+| Same-size 256B (10M alloc+free) | 29,476,384 | 30,933,507 | 1.05x |
+| Batch 512x1000 (512k alloc+free) | 22,195,518 | 31,582,863 | 1.42x |
+| Random alloc/free/realloc (200k) | 2,169,171 | 1,149,705 | 0.53x |
+| Large 8-128KB (30k alloc+free) | 155,854 | 212,936 | 1.37x |
+| Fragmentation (5k reallocs) | 36,338,003 | 10,977,093 | 0.30x |
+| Multi-thread 4x50k (200k total) | 2,879,837 | 3,893,444 | 1.35x |
 
 ### Memory Footprint (Peak RSS)
 
 | Benchmark | glibc malloc | my_ptmalloc | Overhead |
 |-----------|-------------|-------------|----------|
-| Random alloc/free | 16,896 KB | 23,040 KB | 1.4x |
-| Same-size / batch | 17,024 KB | 23,168 KB | 1.4x |
-| Large alloc | 20,156 KB | 23,168 KB | 1.1x |
-| Fragmentation | 20,156 KB | 24,064 KB | 1.2x |
-| Multi-thread | 101,148 KB | 117,888 KB | 1.2x |
+| Random alloc/free | 16,896 KB | 22,784 KB | 1.3x |
+| Same-size / batch | 17,024 KB | 22,912 KB | 1.3x |
+| Large alloc | 20,152 KB | 22,912 KB | 1.1x |
+| Fragmentation | 20,152 KB | 23,808 KB | 1.2x |
+| Multi-thread | 101,144 KB | 117,760 KB | 1.2x |
 
 ### Analysis
 
-- **Small-object hot path**: 32B/64B are near glibc, and 256B is faster in this run while avoiding per-object chunk headers.
+- **Small-object hot path**: 32B, 64B, and 256B are slightly faster than glibc in this run while avoiding per-object chunk headers.
 - **Batch operations**: more than 2x glibc in this run because repeated <=1024B allocations stay on thread-local slab lists and refill/drain in batches through the central cache.
 - **Random alloc/free/realloc**: still slower than glibc, but improved over the previous ptmalloc-only path because many small allocations avoid arena/bin logic.
 - **Large allocations**: faster than glibc in this run, mainly due to earlier coalescing/trim work and less retained heap state.
 - **Multi-threaded**: now faster than glibc in this run after central per-class batch refill/drain reduced per-thread slab isolation.
-- **Fragmentation microbench**: improved again, from the previous documented 6,368,729 ops/sec to 9,328,898 ops/sec. It remains behind glibc because slab spans are not reclaimed and realloc policy is still simpler.
+- **Fragmentation microbench**: improved again, from the previous documented 9,328,898 ops/sec to 10,977,093 ops/sec. It remains behind glibc because slab spans are not reclaimed and realloc policy is still simpler.
+
+### Backend Comparison
+
+`MY_MALLOC_MODE=ptmalloc` disables the slab frontend and exercises the ptmalloc-style backend. In the same run, the baseline backend produced:
+
+| Benchmark | ptmalloc-style backend |
+|-----------|------------------------|
+| Random alloc/free/realloc | 977,860 ops/sec |
+| Same-size 32B | 45,851,423 ops/sec |
+| Same-size 64B | 40,085,427 ops/sec |
+| Same-size 256B | 31,645,253 ops/sec |
+| Batch 512x1000 | 28,357,378 ops/sec |
+| Large 8-128KB | 165,725 ops/sec |
+| Fragmentation | 5,296,223 ops/sec |
+| Multi-thread 4x50k | 5,030,526 ops/sec |
+
+This mode is mainly for learning and regression comparisons; the default hybrid mode is the primary optimized path.
 
 ### Optimization Notes
 

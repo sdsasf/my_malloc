@@ -5,12 +5,14 @@
 #include "my_ptmalloc/arena_manager.h"
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/slab_allocator.h"
+#include "my_ptmalloc/allocator_lab.h"
 #include <cstring>
 #include <new>
 
 namespace my_ptmalloc {
 
 void* my_calloc(size_t n, size_t size) noexcept {
+    if (allocator_stats_enabled_fast()) stats_record_calloc();
     // Check for overflow
     size_t total = n * size;
     if (n != 0 && total / n != size) return nullptr;

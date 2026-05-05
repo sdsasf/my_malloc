@@ -8,6 +8,7 @@
 #include "my_ptmalloc/tcache.h"
 #include "my_ptmalloc/observer.h"
 #include "my_ptmalloc/slab_allocator.h"
+#include "my_ptmalloc/allocator_lab.h"
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/types.h"
 #include "my_ptmalloc/chunk.h"
@@ -21,8 +22,12 @@ void* my_malloc(size_t size) noexcept {
     // Edge case: zero-size allocation
     if (size == 0) size = 1;
 
-    if (void* slab = slab_malloc(size)) {
-        return slab;
+    if (allocator_mode() == AllocMode::Hybrid) {
+        if (void* slab = slab_malloc(size)) {
+            if (allocator_stats_enabled_fast()) stats_record_alloc(AllocPath::Slab);
+            if (allocator_trace_enabled_fast()) trace_record(AllocOp::Malloc, AllocPath::Slab, size, slab);
+            return slab;
+        }
     }
 
     // Compute aligned chunk size
@@ -41,6 +46,8 @@ void* my_malloc(size_t size) noexcept {
             if (c->chunk_size().value >= MINSIZE &&
                 (c->chunk_size().value & MALLOC_ALIGN_MASK) == 0) {
                 c->mark_inuse();
+                if (allocator_stats_enabled_fast()) stats_record_alloc(AllocPath::Tcache);
+                if (allocator_trace_enabled_fast()) trace_record(AllocOp::Malloc, AllocPath::Tcache, size, cached);
                 return cached;
             }
 #if MY_PTMALLOC_DEBUG
@@ -76,6 +83,12 @@ void* my_malloc(size_t size) noexcept {
         }
     }
 
+    if (success && result) {
+        if (allocator_stats_enabled_fast()) stats_record_alloc(AllocPath::Arena);
+        if (allocator_trace_enabled_fast()) trace_record(AllocOp::Malloc, AllocPath::Arena, size, result);
+    } else {
+        if (allocator_trace_enabled_fast()) trace_record(AllocOp::Malloc, AllocPath::None, size, nullptr);
+    }
     return success ? result : nullptr;
 }
 

@@ -7,6 +7,7 @@
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/heap.h"
 #include "my_ptmalloc/slab_allocator.h"
+#include "my_ptmalloc/allocator_lab.h"
 #include "my_ptmalloc/types.h"
 #include <cstring>
 
@@ -36,6 +37,7 @@ static void split_allocated_tail(Arena& arena, Chunk* p, ChunkSize nb,
 }
 
 void* my_realloc(void* ptr, size_t size) noexcept {
+    if (allocator_stats_enabled_fast()) stats_record_realloc();
     // realloc(NULL, size) == malloc(size)
     if (!ptr) return my_malloc(size);
 
@@ -47,11 +49,18 @@ void* my_realloc(void* ptr, size_t size) noexcept {
 
     size_t slab_usable = slab_usable_size(ptr);
     if (slab_usable != 0) {
-        if (size <= slab_usable) return ptr;
+        if (size <= slab_usable) {
+            if (allocator_trace_enabled_fast()) trace_record(AllocOp::Realloc, AllocPath::Slab, size, ptr);
+            return ptr;
+        }
         void* new_ptr = my_malloc(size);
         if (!new_ptr) return nullptr;
         std::memcpy(new_ptr, ptr, slab_usable);
         my_free(ptr);
+        if (allocator_trace_enabled_fast()) {
+            trace_record(AllocOp::Realloc, slab_usable_size(new_ptr) ? AllocPath::Slab : AllocPath::Arena,
+                         size, new_ptr);
+        }
         return new_ptr;
     }
 
@@ -94,6 +103,7 @@ void* my_realloc(void* ptr, size_t size) noexcept {
                         oldp->mark_inuse();
                     }
                     arena->unlock();
+                    if (allocator_trace_enabled_fast()) trace_record(AllocOp::Realloc, AllocPath::Arena, size, ptr);
                     return ptr;
                 }
             }
@@ -105,6 +115,7 @@ void* my_realloc(void* ptr, size_t size) noexcept {
                     if (arena->last_remainder_ == next) arena->last_remainder_ = nullptr;
                     split_allocated_tail(*arena, oldp, nb, total, flags);
                     arena->unlock();
+                    if (allocator_trace_enabled_fast()) trace_record(AllocOp::Realloc, AllocPath::Arena, size, ptr);
                     return ptr;
                 }
             }

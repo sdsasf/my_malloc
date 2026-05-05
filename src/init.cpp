@@ -7,6 +7,7 @@
 #include "my_ptmalloc/arena_manager.h"
 #include "my_ptmalloc/alloc_pipeline.h"
 #include "my_ptmalloc/my_malloc.h"
+#include "my_ptmalloc/allocator_lab.h"
 #include <pthread.h>
 
 namespace my_ptmalloc {
@@ -31,6 +32,7 @@ static bool g_initialized = false;
 void my_malloc_init() noexcept {
     if (g_initialized) return;
     g_initialized = true;
+    allocator_lab_init();
 
     // Create arena manager (initializes main arena and top chunk)
     static ArenaManager arena_manager_storage;

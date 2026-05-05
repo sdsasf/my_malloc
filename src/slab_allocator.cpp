@@ -1,6 +1,7 @@
 // Small-object slab allocator.
 
 #include "my_ptmalloc/slab_allocator.h"
+#include "my_ptmalloc/allocator_lab.h"
 #include "my_ptmalloc/config.h"
 
 #include <pthread.h>
@@ -172,6 +173,7 @@ void table_insert(void* base, SlabHeader* slab) noexcept {
 
     table_insert(reinterpret_cast<void*>(aligned), slab);
     central_push_list(idx, head, tail, slab->object_count);
+    if (allocator_stats_enabled_fast()) stats_record_slab_new();
     return true;
 }
 
@@ -198,6 +200,7 @@ void* slab_malloc(size_t size) noexcept {
             if (!allocate_slab(idx)) return nullptr;
             head = central_take_batch(idx, SLAB_REFILL_BATCH, count);
         }
+        if (head && allocator_stats_enabled_fast()) stats_record_slab_refill();
         tls_lists[idx] = head;
         tls_counts[idx] = count;
         if (!head) return nullptr;
@@ -225,6 +228,7 @@ void slab_drain(size_t idx) noexcept {
     tls_counts[idx] -= drain_count;
     drain_tail->next = nullptr;
     central_push_list(idx, drain_head, drain_tail, drain_count);
+    if (allocator_stats_enabled_fast()) stats_record_slab_drain();
 }
 
 bool slab_free(void* ptr) noexcept {

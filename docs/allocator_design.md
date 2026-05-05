@@ -21,6 +21,8 @@ The ptmalloc-style fallback keeps:
 
 The project deliberately differs from glibc in implementation style. Instead of one macro-heavy `malloc.c`, it uses small C++ classes and POD metadata: `SlabHeader`, `ArenaManager`, `Arena`, `BinManager`, `TcachePerthread`, `FastBins`, `SmallBins`, `LargeBins`, and `UnsortedBin`.
 
+The project is also an allocator lab. Runtime controls can switch between the optimized hybrid frontend and the ptmalloc-style backend, and optional counters/tracing make allocation decisions observable without forcing telemetry overhead into default benchmark runs.
+
 ## 2. System Overview
 
 ```mermaid
@@ -60,6 +62,32 @@ flowchart TB
     HI --> AR
 ```
 
+## 3. Allocator Lab Controls
+
+The runtime policy is selected once during allocator initialization:
+
+```text
+MY_MALLOC_MODE=hybrid    default: slab frontend + ptmalloc fallback
+MY_MALLOC_MODE=ptmalloc  disable slab frontend for baseline experiments
+```
+
+Observability is opt-in:
+
+```text
+MY_MALLOC_STATS=1  enable atomic path counters
+MY_MALLOC_TRACE=1  enable trace ring and stats
+```
+
+Stats are exposed through:
+
+```cpp
+my_malloc_stats_snapshot();
+my_malloc_dump_stats_json(FILE*);
+my_malloc_stats_reset();
+```
+
+Telemetry is deliberately disabled by default. A benchmark run with always-on atomic counters showed a large same-size throughput regression, so the current design keeps performance mode and learning/inspection mode separate.
+
 The intended hot paths are:
 
 1. For normal `<=1024B` allocations, use the slab allocator and avoid chunk headers entirely.
@@ -68,7 +96,7 @@ The intended hot paths are:
 4. Search arena-local structures from cheapest to most expensive.
 5. Grow the heap or mmap only if all reusable structures miss.
 
-## 3. Core Data Structure Relationships
+## 4. Core Data Structure Relationships
 
 ```mermaid
 classDiagram
@@ -181,7 +209,7 @@ Important ownership rules:
 - Non-main arena chunks carry `NON_MAIN_ARENA`, and `my_free` uses `HeapInfo` to find the owning arena.
 - `BinManager::unlink_free_chunk` is the single slow-path unlink helper for chunks that may be in unsorted, small, or large bins.
 
-## 4. Small Slab Layout
+## 5. Small Slab Layout
 
 The slab path is intentionally not ptmalloc-shaped. A slab is a 64KB-aligned mapping with one `SlabHeader` at the start and fixed-size objects after it.
 
@@ -224,7 +252,7 @@ flowchart LR
 
 Current limitation: slabs are not yet returned to the OS when empty. The central list reduces per-thread isolation and improves multi-thread performance, but empty-span reclamation still needs a span/page-map layer.
 
-## 5. Chunk Layout
+## 6. Chunk Layout
 
 Each allocation starts with a `Chunk` header. The user pointer points after `prev_size` and `size`.
 
@@ -260,7 +288,7 @@ free chunk:
 
 `fd_nextsize` and `bk_nextsize` exist for layout compatibility, but the active large-bin implementation currently uses sorted `fd`/`bk` lists plus a binmap instead of maintaining a secondary next-size chain.
 
-## 6. Arena and Heap Layout
+## 7. Arena and Heap Layout
 
 Main arena memory is mapped as a heap region with one top chunk and a fencepost at the end.
 
@@ -295,7 +323,7 @@ That mask only works if non-main heaps begin on `HEAP_MAX_SIZE` boundaries. The 
 
 The fencepost prevents `Chunk::mark_inuse()` from writing past the mapped heap when the previous chunk reaches the region boundary.
 
-## 7. Allocation Path
+## 8. Allocation Path
 
 ```mermaid
 flowchart TD
@@ -344,7 +372,7 @@ The key architectural change is that small normal allocations bypass chunk metad
 
 Aligned allocations temporarily bypass the slab path because `my_memalign` still manipulates chunk headers internally.
 
-## 8. Free Path
+## 9. Free Path
 
 ```mermaid
 flowchart TD
@@ -382,7 +410,7 @@ Tcache chunks are treated as allocated from the arena coalescing perspective. Th
 
 Forward and backward coalescing now use bin membership rather than assuming that every adjacent free chunk is still in unsorted. This matters because an earlier allocation may have scanned unsorted and moved the neighbor into a small or large bin. The free path asks `BinManager` to unlink the neighbor from the correct structure before merging.
 
-## 9. Realloc Growth Path
+## 10. Realloc Growth Path
 
 ```mermaid
 flowchart TD
@@ -419,7 +447,7 @@ For chunk-backed objects, the previous implementation always used allocate-copy-
 
 This directly targets fragmentation-heavy realloc workloads because it avoids creating a new allocation and freeing the old one when neighboring space is already available.
 
-## 10. Bin Flow
+## 11. Bin Flow
 
 ```mermaid
 flowchart LR
@@ -451,7 +479,7 @@ The unsorted bin is intentionally a staging area, not a permanent store. On allo
 - non-matching chunks are moved to small or large bins;
 - arbitrary larger chunks are not split directly from unsorted, because that acts like first-fit and caused severe fragmentation in random workloads.
 
-## 11. Large Bin Search
+## 12. Large Bin Search
 
 ```mermaid
 flowchart TD
@@ -474,7 +502,7 @@ flowchart TD
 
 Large bins are sorted largest-to-smallest in insertion order, and allocation walks from the back to find the smallest chunk that can satisfy the request. The binmap avoids scanning empty large-bin ranges.
 
-## 12. What Comes From ptmalloc and What Is Custom
+## 13. What Comes From ptmalloc and What Is Custom
 
 | Area | ptmalloc-style design | Project-specific implementation |
 |---|---|---|
@@ -488,8 +516,9 @@ Large bins are sorted largest-to-smallest in insertion order, and allocation wal
 | Arenas | Per-thread arena assignment | `ArenaManager` create/reuse logic with `HeapInfo` owner lookup |
 | Realloc | Try to expand in place before moving | Grow into top or next linked free chunk, then split remainder |
 | Debug checks | Development diagnostics | Compiled out unless `MY_PTMALLOC_ENABLE_DEBUG=1` |
+| Learning controls | Usually external profiling | Runtime mode switch, opt-in JSON stats, optional trace ring |
 
-## 13. Optimization Summary
+## 14. Optimization Summary
 
 ### Small-object Slab Path
 
@@ -539,19 +568,18 @@ When free/coalescing merges a chunk into the arena top, the allocator now calls 
 
 Metadata validation and `fprintf` diagnostics are useful during allocator development but expensive in release builds. They are behind `MY_PTMALLOC_ENABLE_DEBUG`.
 
-## 14. Current Performance Shape
+## 15. Current Performance Shape
 
 Measured on Linux x86_64 with `-O2 -march=native` on May 4, 2026:
 
-- 32B and 64B same-size allocation are near glibc in the current run;
-- 256B same-size allocation is slightly ahead in the current run;
+- 32B, 64B, and 256B same-size allocation are slightly ahead of glibc in the current run;
 - batch allocation/free remains faster because small objects stay in slab thread-local lists;
 - random alloc/free/realloc is still slower than glibc;
-- fragmentation-heavy realloc workloads improved again after the slab path but remain a throughput gap;
+- fragmentation-heavy realloc workloads improved again after the slab path and central batching but remain a throughput gap;
 - large allocation throughput is ahead in this run, with RSS close to glibc;
 - multi-threaded throughput is ahead in this run after central slab refill/drain, but true remote-free ownership is still not implemented.
 
-## 15. Remaining Work
+## 16. Remaining Work
 
 - Replace slab-header lookup with a real page map so every page maps directly to span metadata.
 - Add explicit `Span` metadata with owner, free count, page count, and state.

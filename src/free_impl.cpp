@@ -7,6 +7,7 @@
 #include "my_ptmalloc/tcache.h"
 #include "my_ptmalloc/observer.h"
 #include "my_ptmalloc/slab_allocator.h"
+#include "my_ptmalloc/allocator_lab.h"
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/types.h"
 #include "my_ptmalloc/chunk.h"
@@ -89,7 +90,11 @@ static void consolidate_and_free(Arena& arena, Chunk* p) noexcept {
 void my_free(void* ptr) noexcept {
     if (!ptr) return;
 
-    if (slab_free(ptr)) return;
+    if (slab_free(ptr)) {
+        if (allocator_stats_enabled_fast()) stats_record_free(AllocPath::Slab);
+        if (allocator_trace_enabled_fast()) trace_record(AllocOp::Free, AllocPath::Slab, 0, ptr);
+        return;
+    }
 
     Chunk* p = Chunk::from_user_ptr(ptr);
     size_t chunk_size = p->chunk_size().value;
@@ -109,6 +114,8 @@ void my_free(void* ptr) noexcept {
             SysMemory* mem = g_arena_manager->sys_memory();
             if (mem) mem->unmap(p, chunk_size);
         }
+        if (allocator_stats_enabled_fast()) stats_record_free(AllocPath::Mmap);
+        if (allocator_trace_enabled_fast()) trace_record(AllocOp::Free, AllocPath::Mmap, chunk_size, ptr);
         return;
     }
 
@@ -125,6 +132,8 @@ void my_free(void* ptr) noexcept {
             return;  // refuse to free
         }
         if (tcache->free(tidx, p)) {
+            if (allocator_stats_enabled_fast()) stats_record_free(AllocPath::Tcache);
+            if (allocator_trace_enabled_fast()) trace_record(AllocOp::Free, AllocPath::Tcache, chunk_size, ptr);
             return;
         }
     }
@@ -136,6 +145,8 @@ void my_free(void* ptr) noexcept {
     target_arena->lock();
     consolidate_and_free(*target_arena, p);
     target_arena->unlock();
+    if (allocator_stats_enabled_fast()) stats_record_free(AllocPath::Arena);
+    if (allocator_trace_enabled_fast()) trace_record(AllocOp::Free, AllocPath::Arena, chunk_size, ptr);
 }
 
 } // namespace my_ptmalloc

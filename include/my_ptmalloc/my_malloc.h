@@ -3,6 +3,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+
+#include "allocator_lab.h"
 
 namespace my_ptmalloc {
 
@@ -20,6 +23,9 @@ void  my_free(void* ptr) noexcept;
 // Tuning
 int    my_mallopt(int param, int value) noexcept;
 size_t my_malloc_usable_size(void* ptr) noexcept;
+[[nodiscard]] AllocStatsSnapshot my_malloc_stats_snapshot() noexcept;
+void my_malloc_stats_reset() noexcept;
+void my_malloc_dump_stats_json(FILE* out) noexcept;
 
 // Init/shutdown
 void   my_malloc_init() noexcept;
