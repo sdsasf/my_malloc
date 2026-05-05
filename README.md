@@ -58,6 +58,7 @@ A C++17 hybrid memory allocator. It keeps a ptmalloc-style arena/bin fallback fo
 | [docs/allocator_design.md](docs/allocator_design.md) | Concrete system design: slab layout, chunk layout, arena/bin relationships, allocation/free/realloc paths, and implemented optimizations. |
 | [docs/allocator_families.md](docs/allocator_families.md) | Allocator-family guide: ptmalloc, tcmalloc-like slab allocation, jemalloc-like extent ideas, mimalloc-like remote-free ideas, adaptive direction, and what this project implements or simplifies. |
 | [docs/allocator_lab.md](docs/allocator_lab.md) | Lab guide: strategy API, external plugins, validation, benchmarking, JSON output, and how to add custom strategies. |
+| [docs/benchmarking.md](docs/benchmarking.md) | Configurable benchmark guide: profiles, individual benchmark methods, parameters, JSON output, and external suites such as mimalloc-bench. |
 
 ### Allocation Flow
 
@@ -180,6 +181,15 @@ Validate and benchmark built-in strategies:
 ./build/bench_runner --strategy libc --json
 ```
 
+Run configurable benchmark profiles:
+
+```bash
+./build/bench_runner --strategy hybrid --profile smoke
+./build/bench_runner --strategy hybrid --profile micro
+./build/bench_runner --strategy hybrid --profile stress --json
+./build/bench_runner --strategy hybrid --bench fragmentation --iters 100000 --slots 4096
+```
+
 Build and run the example plugin:
 
 ```bash
@@ -262,6 +272,7 @@ See:
 - [docs/allocator_design.md](docs/allocator_design.md) for the concrete internal data structures and allocation/free paths.
 - [docs/allocator_families.md](docs/allocator_families.md) for ptmalloc, tcmalloc-like slab, jemalloc-like, mimalloc-like, adaptive, and plugin strategy principles, including what this project implements and simplifies.
 - [docs/allocator_lab.md](docs/allocator_lab.md) for the learning-oriented strategy/plugin/validation/benchmark guide.
+- [docs/benchmarking.md](docs/benchmarking.md) for configurable benchmark profiles, individual test methods, parameters, JSON output, and external suites such as mimalloc-bench.
 
 ## Project Structure
 
@@ -272,7 +283,8 @@ my_ptmalloc/
 ├── docs/
 │   ├── allocator_design.md       # Concrete current implementation design
 │   ├── allocator_families.md     # Allocator-family principles and project tradeoffs
-│   └── allocator_lab.md          # Strategy/plugin/benchmark learning guide
+│   ├── allocator_lab.md          # Strategy/plugin/benchmark learning guide
+│   └── benchmarking.md           # Configurable benchmark guide
 ├── include/my_ptmalloc/
 │   ├── config.h              # Platform constants (constexpr)
 │   ├── types.h               # Strong types: ChunkSize, UserSize, BinIndex

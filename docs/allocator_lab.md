@@ -4,7 +4,7 @@ This project is now structured as a learning-oriented allocator laboratory. It c
 
 The goal is not to claim full jemalloc/tcmalloc/mimalloc compatibility. The goal is to expose their important ideas as experimental modes and make those ideas measurable.
 
-For a more detailed explanation of each allocator family, the features implemented by this project, and the simplifications made for learning, read [allocator_families.md](allocator_families.md).
+For a more detailed explanation of each allocator family, the features implemented by this project, and the simplifications made for learning, read [allocator_families.md](allocator_families.md). For benchmark profiles, benchmark parameters, JSON output, and external suites, read [benchmarking.md](benchmarking.md).
 
 ## 1. Quick Start
 
@@ -30,6 +30,24 @@ Run standardized benchmarks:
 ./build/bench_runner --strategy ptmalloc
 ./build/bench_runner --strategy libc
 ./build/bench_runner --strategy plugin:./build/libcounting_malloc_strategy.so
+```
+
+Run named benchmark profiles:
+
+```bash
+./build/bench_runner --strategy hybrid --profile smoke
+./build/bench_runner --strategy hybrid --profile micro
+./build/bench_runner --strategy hybrid --profile stress
+./build/bench_runner --strategy hybrid --profile all --json
+```
+
+Run individual configurable benchmark methods:
+
+```bash
+./build/bench_runner --strategy hybrid --bench same_size --size 32 --iters 1000000
+./build/bench_runner --strategy hybrid --bench random --random-iters 500000 --slots 8192
+./build/bench_runner --strategy hybrid --bench fragmentation --iters 100000 --min-size 16 --max-size 16384
+./build/bench_runner --strategy hybrid --bench cross_thread_free --threads 8 --batch 10000
 ```
 
 Machine-readable output:
@@ -377,12 +395,18 @@ Plugin benchmark:
 ./build/bench_runner --strategy plugin:./build/libcounting_malloc_strategy.so --json
 ```
 
-Current workloads:
+Current built-in workload methods:
 
-- same-size 64B;
-- same-size 256B;
-- batch 512x1000;
-- random alloc/free/realloc.
+- `same_size`;
+- `same_size_64`;
+- `same_size_256`;
+- `batch`;
+- `random`;
+- `fragmentation`;
+- `cross_thread_free`;
+- `latency_sample`.
+
+The runner supports profiles (`smoke`, `micro`, `stress`, `all`) and parameters such as `--iters`, `--random-iters`, `--size`, `--min-size`, `--max-size`, `--slots`, `--batch`, `--rounds`, `--threads`, and `--seed`. See [benchmarking.md](benchmarking.md) for the full benchmark guide and for external suites such as `mimalloc-bench`.
 
 Existing legacy benchmarks remain available:
 
