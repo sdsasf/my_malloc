@@ -35,6 +35,44 @@ static char bootstrap_buf[4096];
 static size_t bootstrap_offset = 0;
 static bool bootstrap_active = true;
 
+constexpr size_t REAL_BOOTSTRAP_MAX = 64;
+static void* real_bootstrap_ptrs[REAL_BOOTSTRAP_MAX];
+
+static void real_bootstrap_track(void* ptr) noexcept {
+    if (!ptr) return;
+    for (size_t i = 0; i < REAL_BOOTSTRAP_MAX; ++i) {
+        if (real_bootstrap_ptrs[i] == nullptr) {
+            real_bootstrap_ptrs[i] = ptr;
+            return;
+        }
+    }
+}
+
+static bool real_bootstrap_untrack(void* ptr) noexcept {
+    if (!ptr) return false;
+    for (size_t i = 0; i < REAL_BOOTSTRAP_MAX; ++i) {
+        if (real_bootstrap_ptrs[i] == ptr) {
+            real_bootstrap_ptrs[i] = nullptr;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool real_bootstrap_replace(void* old_ptr, void* new_ptr) noexcept {
+    if (!old_ptr) {
+        real_bootstrap_track(new_ptr);
+        return true;
+    }
+    for (size_t i = 0; i < REAL_BOOTSTRAP_MAX; ++i) {
+        if (real_bootstrap_ptrs[i] == old_ptr) {
+            real_bootstrap_ptrs[i] = new_ptr;
+            return true;
+        }
+    }
+    return false;
+}
+
 static void* bootstrap_malloc(size_t size) noexcept {
     size = (size + 15) & ~15;  // align to 16
     if (bootstrap_offset + size > sizeof(bootstrap_buf)) {
@@ -56,7 +94,9 @@ void* malloc(size_t size) noexcept {
         // Use real malloc for bootstrap
         if (real_malloc) {
             bootstrap_active = false;
-            return real_malloc(size);
+            void* p = real_malloc(size);
+            real_bootstrap_track(p);
+            return p;
         }
         return bootstrap_malloc(size);
     }
@@ -80,6 +120,11 @@ void free(void* ptr) noexcept {
         return;
     }
 
+    if (real_bootstrap_untrack(ptr)) {
+        if (real_free) real_free(ptr);
+        return;
+    }
+
     my_ptmalloc::my_free(ptr);
 }
 
@@ -88,7 +133,9 @@ void* calloc(size_t n, size_t size) noexcept {
         my_ptmalloc::hooks_init();
         if (real_calloc) {
             bootstrap_active = false;
-            return real_calloc(n, size);
+            void* p = real_calloc(n, size);
+            real_bootstrap_track(p);
+            return p;
         }
         void* p = bootstrap_malloc(n * size);
         if (p) memset(p, 0, n * size);
@@ -120,6 +167,13 @@ void* realloc(void* ptr, size_t size) noexcept {
     if (!hooks_initialized || bootstrap_active) {
         if (real_realloc) return real_realloc(ptr, size);
         return nullptr;
+    }
+
+    if (real_bootstrap_replace(ptr, ptr)) {
+        if (!real_realloc) return nullptr;
+        void* new_ptr = real_realloc(ptr, size);
+        if (new_ptr) real_bootstrap_replace(ptr, new_ptr);
+        return new_ptr;
     }
 
     return my_ptmalloc::my_realloc(ptr, size);

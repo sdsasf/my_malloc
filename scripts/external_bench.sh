@@ -34,9 +34,13 @@ commands:
       Run installed real-application smoke workloads with LD_PRELOAD where tools
       are available. Missing tools are reported and skipped.
 
+  run-redis
+      Run the Redis workload from mimalloc-bench if Redis has been built with
+      build-mimalloc-bench redis.
+
   run-all
       Run setup-mimalloc-bench, run-mimalloc-bench, run-glibc-benchtests if
-      GLIBC_SRC is set, and run-real-apps.
+      GLIBC_SRC is set, run-redis, and run-real-apps.
 
 environment:
   BUILD_DIR         default: ./build
@@ -52,6 +56,7 @@ examples:
   scripts/external_bench.sh build-mimalloc-bench bench
   scripts/external_bench.sh run-mimalloc-bench larson alloc-test cscratch
   GLIBC_SRC=/path/to/glibc scripts/external_bench.sh run-glibc-benchtests "$GLIBC_SRC"
+  scripts/external_bench.sh run-redis
   scripts/external_bench.sh run-real-apps
 USAGE
 }
@@ -249,6 +254,62 @@ run_glibc_benchtests() {
   done
 }
 
+run_redis_one() {
+  local mode="$1"
+  local redis_dir="$EXTERNAL_DIR/mimalloc-bench/extern/redis-6.2.7/src"
+  need_file "$redis_dir/redis-server"
+  need_file "$redis_dir/redis-benchmark"
+  need_file "$redis_dir/redis-cli"
+  need_my_malloc
+
+  local port
+  port="$(python3 - <<'PY'
+import random
+print(random.randint(20000, 50000))
+PY
+)"
+  local out
+  out="$(log_path "redis-$mode")"
+  echo "==> redis mode=$mode port=$port" | tee "$out"
+
+  local server_env=()
+  case "$mode" in
+    glibc) server_env=();;
+    hybrid) server_env=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=hybrid);;
+    ptmalloc) server_env=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=ptmalloc);;
+    *) echo "unknown redis mode: $mode" | tee -a "$out"; return 0;;
+  esac
+
+  set +e
+  env "${server_env[@]}" "$redis_dir/redis-server" \
+    --port "$port" --save '' --appendonly no --daemonize yes >> "$out" 2>&1
+  local server_status=$?
+  if [[ $server_status -ne 0 ]]; then
+    echo "redis-server failed to start: $server_status" | tee -a "$out"
+    set -e
+    return 0
+  fi
+
+  sleep 1
+  /usr/bin/time -f "elapsed=%E peak_rss_kb=%M user=%U sys=%S" \
+    "$redis_dir/redis-benchmark" -p "$port" -r 1000000 -n 100000 -q -P 16 \
+    lpush a 1 2 3 4 5 lrange a 1 5 >> "$out" 2>&1
+  local bench_status=$?
+  "$redis_dir/redis-cli" -p "$port" shutdown >> "$out" 2>&1
+  local stop_status=$?
+  set -e
+
+  echo "benchmark_exit_status=$bench_status" | tee -a "$out"
+  echo "shutdown_exit_status=$stop_status" | tee -a "$out"
+  echo "wrote $out"
+}
+
+run_redis() {
+  run_redis_one glibc
+  run_redis_one hybrid
+  run_redis_one ptmalloc
+}
+
 run_real_apps() {
   need_my_malloc
   local out
@@ -276,6 +337,12 @@ run_real_apps() {
     echo "== lua ==" | tee -a "$out"
     env LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=hybrid lua -e 'local t={}; for i=1,200000 do t[i]=tostring(i)..":"..tostring(i*i) end; print(#t,t[199999])' \
       2>&1 | tee -a "$out"
+  elif [[ -x "$EXTERNAL_DIR/mimalloc-bench/extern/redis-6.2.7/deps/lua/src/lua" ]]; then
+    echo "== lua (redis vendored) ==" | tee -a "$out"
+    env LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=hybrid \
+      "$EXTERNAL_DIR/mimalloc-bench/extern/redis-6.2.7/deps/lua/src/lua" \
+      -e 'local t={}; for i=1,200000 do t[i]=tostring(i)..":"..tostring(i*i) end; print(#t,t[199999])' \
+      2>&1 | tee -a "$out"
   else
     echo "skip lua: not installed" | tee -a "$out"
   fi
@@ -289,7 +356,9 @@ run_real_apps() {
   fi
 
   if command -v redis-server >/dev/null 2>&1; then
-    echo "redis-server detected, but no server benchmark is run by default; use redis-benchmark in your environment." | tee -a "$out"
+    echo "redis-server detected; use scripts/external_bench.sh run-redis for the server benchmark." | tee -a "$out"
+  elif [[ -x "$EXTERNAL_DIR/mimalloc-bench/extern/redis-6.2.7/src/redis-server" ]]; then
+    echo "redis built under mimalloc-bench; use scripts/external_bench.sh run-redis for the server benchmark." | tee -a "$out"
   else
     echo "skip redis-server: not installed" | tee -a "$out"
   fi
@@ -308,6 +377,11 @@ run_all() {
     run_glibc_benchtests "$GLIBC_SRC"
   else
     echo "skip glibc benchtests: GLIBC_SRC not set"
+  fi
+  if [[ -x "$EXTERNAL_DIR/mimalloc-bench/extern/redis-6.2.7/src/redis-server" ]]; then
+    run_redis
+  else
+    echo "skip redis: not built; run build-mimalloc-bench redis"
   fi
   run_real_apps
 }
@@ -333,6 +407,10 @@ case "$cmd" in
   run-real-apps)
     shift
     run_real_apps "$@"
+    ;;
+  run-redis)
+    shift
+    run_redis "$@"
     ;;
   run-all)
     shift

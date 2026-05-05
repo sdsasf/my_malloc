@@ -1,28 +1,47 @@
-# Benchmarking Guide
+# Benchmarking And Performance
 
-This project uses two benchmark layers:
+This document explains how to test allocator correctness and performance. It covers built-in benchmarks, external benchmark suites, Redis, real-application smoke tests, and reporting rules.
 
-1. Built-in configurable benchmarks through `bench_runner`.
-2. External allocator benchmark suites, especially `mimalloc-bench`, through `LD_PRELOAD`.
+## 1. Benchmark Layers
 
-The built-in runner is for fast iteration and regression checks. External suites are for stronger comparison against allocator research and production allocators.
+The project uses three benchmark layers:
 
-## 1. Build
+| Layer | Tool | Purpose |
+|---|---|---|
+| Correctness | `allocator_validate`, `ctest` | Catch allocator API and memory corruption bugs before timing anything. |
+| Built-in benchmarks | `bench_runner` | Fast local comparison with configurable workloads and JSON output. |
+| External benchmarks | `scripts/external_bench.sh` | Stronger LD_PRELOAD tests using `mimalloc-bench`, Redis, glibc benchtests, and real programs when available. |
+
+Recommended order:
+
+```bash
+ctest --test-dir build --output-on-failure
+./build/allocator_validate --strategy hybrid
+./build/allocator_validate --strategy ptmalloc
+./build/bench_runner --strategy hybrid --profile smoke
+scripts/external_bench.sh run-mimalloc-bench rptest
+```
+
+## 2. Build
 
 ```bash
 cmake -B build .
 cmake --build build -j$(nproc)
 ```
 
-The benchmark target is:
+The main benchmark binary is:
 
 ```bash
 ./build/bench_runner --help
 ```
 
-## 2. Strategy Selection
+The LD_PRELOAD library is:
 
-Every built-in benchmark runs through the strategy API:
+```text
+build/libmy_ptmalloc.so
+```
+
+## 3. Built-in Strategy Selection
 
 ```bash
 ./build/bench_runner --strategy hybrid
@@ -31,301 +50,227 @@ Every built-in benchmark runs through the strategy API:
 ./build/bench_runner --strategy plugin:./build/libcounting_malloc_strategy.so
 ```
 
-Strategy meanings:
-
 | Strategy | Meaning |
 |---|---|
-| `hybrid` | Small-object slab frontend plus ptmalloc-style fallback. |
-| `ptmalloc` | Slab disabled; chunk/tcache/bin/arena backend only. |
-| `libc` / `glibc` | System allocator baseline. |
-| `plugin:path.so` | Custom external strategy. |
+| `hybrid` | Slab frontend plus ptmalloc-style fallback |
+| `ptmalloc` | Chunk/bin/arena backend only |
+| `libc` / `glibc` | System allocator baseline |
+| `plugin:path.so` | External allocator strategy |
 
-Validate custom strategies before benchmarking:
-
-```bash
-./build/allocator_validate --strategy plugin:./libyour_strategy.so
-```
-
-## 3. Profiles
-
-Profiles are named groups of benchmark methods:
+## 4. Built-in Profiles
 
 ```bash
-./build/bench_runner --profile smoke
-./build/bench_runner --profile micro
-./build/bench_runner --profile stress
-./build/bench_runner --profile all
-```
-
-| Profile | Benchmarks | Purpose |
-|---|---|---|
-| `smoke` | `same_size_64`, `random` | Quick sanity check after edits. |
-| `micro` | `same_size_64`, `same_size_256`, `batch`, `random` | Default fast comparison profile. |
-| `stress` | `random`, `fragmentation`, `cross_thread_free` | Mixed-size, realloc, and ownership stress. |
-| `all` | all built-in benchmarks | Broader local run before publishing results. |
-
-## 4. Individual Benchmarks
-
-You can choose exact benchmarks with repeated `--bench` flags:
-
-```bash
-./build/bench_runner --bench same_size --size 32
-./build/bench_runner --bench same_size_64 --bench same_size_256
-./build/bench_runner --bench fragmentation --bench cross_thread_free
-```
-
-Available built-in benchmarks:
-
-| Benchmark | What it measures | Allocator behavior it stresses |
-|---|---|---|
-| `same_size` | Allocate/free one configurable size repeatedly. | Slab/tcache hot path, metadata overhead. |
-| `same_size_64` | Fixed 64-byte hot path. | Small-object fast path. |
-| `same_size_256` | Fixed 256-byte hot path. | Small-object fast path with larger class. |
-| `batch` | Allocate a batch of objects, then free the whole batch. | Thread-local cache refill/drain and central cache behavior. |
-| `random` | Random allocate/free/realloc over live slots. | General-purpose mixed workload, bin search, fragmentation side effects. |
-| `fragmentation` | Realloc existing live objects across a size range. | In-place realloc, coalescing, split policy, RSS pressure. |
-| `cross_thread_free` | Allocate in producer threads and free from different threads. | Thread-local cache ownership and remote-free weakness. |
-| `latency_sample` | Same-size operations with sampled per-op timing in the result name. | Rough tail-latency smoke check. |
-
-## 5. Parameters
-
-The runner is deterministic by default and exposes workload parameters:
-
-```bash
-./build/bench_runner \
-  --strategy hybrid \
-  --bench random \
-  --random-iters 1000000 \
-  --slots 8192 \
-  --min-size 16 \
-  --max-size 16384 \
-  --seed 7
-```
-
-Common options:
-
-| Option | Applies to | Meaning |
-|---|---|---|
-| `--iters N` | `same_size`, `fragmentation`, `latency_sample` | Operation count. |
-| `--random-iters N` | `random` | Operation count for random mixed workload. |
-| `--size N` | `same_size`, `latency_sample` | Object size. |
-| `--min-size N` / `--max-size N` | `random`, `fragmentation`, `cross_thread_free` | Size distribution range. |
-| `--slots N` | `random`, `fragmentation` | Live pointer table size. |
-| `--batch N` | `batch`, `cross_thread_free` | Batch size or per-thread object count. |
-| `--rounds N` | `batch` | Number of batch rounds. |
-| `--threads N` | `cross_thread_free` | Number of producer/consumer threads. |
-| `--seed N` | random-like tests | Deterministic RNG seed. |
-
-## 6. JSON Output
-
-Use JSON lines for scripts:
-
-```bash
+./build/bench_runner --strategy hybrid --profile smoke
+./build/bench_runner --strategy hybrid --profile micro
+./build/bench_runner --strategy hybrid --profile stress
 ./build/bench_runner --strategy hybrid --profile all --json
 ```
 
-Example output:
+| Profile | Included workloads | Use case |
+|---|---|---|
+| `smoke` | Small quick tests | Run after each allocator edit |
+| `micro` | Same-size, batch, random | Compare hot paths |
+| `stress` | Random, fragmentation, cross-thread free | Catch fragmentation and ownership weaknesses |
+| `all` | All built-in workloads | Before documenting performance |
+
+## 5. Built-in Workloads
+
+| Workload | What it stresses |
+|---|---|
+| `same_size` | Fast path for one fixed allocation size |
+| `same_size_64` | 64-byte hot path |
+| `same_size_256` | 256-byte hot path |
+| `batch` | Batch refill/drain and repeated allocation/free phases |
+| `random` | Mixed allocation/free/realloc behavior |
+| `fragmentation` | Realloc, split/coalesce policy, RSS pressure |
+| `cross_thread_free` | Producer/consumer ownership behavior |
+| `latency_sample` | Rough latency smoke check |
+
+Examples:
+
+```bash
+./build/bench_runner --strategy hybrid --bench same_size --size 64 --iters 1000000
+./build/bench_runner --strategy hybrid --bench random --random-iters 500000 --slots 8192 --min-size 16 --max-size 16384
+./build/bench_runner --strategy hybrid --bench fragmentation --iters 100000 --slots 4096
+./build/bench_runner --strategy hybrid --bench cross_thread_free --threads 8 --batch 10000
+```
+
+## 6. Parameters
+
+| Option | Meaning |
+|---|---|
+| `--iters N` | Iteration count for fixed-size and fragmentation tests |
+| `--random-iters N` | Iteration count for random mixed tests |
+| `--size N` | Allocation size for same-size tests |
+| `--min-size N` / `--max-size N` | Size distribution range |
+| `--slots N` | Number of live pointer slots |
+| `--batch N` | Batch size |
+| `--rounds N` | Number of batch rounds |
+| `--threads N` | Number of worker threads |
+| `--seed N` | Deterministic random seed |
+| `--json` | Emit JSON lines |
+
+JSON example:
+
+```bash
+./build/bench_runner --strategy hybrid --profile micro --json
+```
 
 ```json
 {"strategy":"hybrid","benchmark":"same_size_64","ops_per_sec":44943821,"ms":0.222,"peak_rss_kb":15872}
 ```
 
-Each row includes:
+## 7. External Benchmark Script
 
-- `strategy`;
-- `benchmark`;
-- `ops_per_sec`;
-- elapsed `ms`;
-- process peak RSS in KB.
-
-Peak RSS is read from `getrusage(RUSAGE_SELF).ru_maxrss`. It is useful for relative comparison inside one run style, but it is not a complete fragmentation metric by itself.
-
-## 7. Recommended Local Matrix
-
-For routine development:
-
-```bash
-./build/allocator_validate --strategy hybrid
-./build/allocator_validate --strategy ptmalloc
-./build/bench_runner --strategy hybrid --profile smoke
-./build/bench_runner --strategy ptmalloc --profile smoke
-```
-
-Before publishing a benchmark table:
-
-```bash
-for s in hybrid ptmalloc libc; do
-  ./build/bench_runner --strategy "$s" --profile all --json
-done
-```
-
-For adaptive policy experiments:
-
-```bash
-./build/bench_runner --strategy hybrid --bench random --bench fragmentation --json
-./build/bench_runner --strategy hybrid --bench cross_thread_free --threads 8 --batch 10000 --json
-./build/bench_runner --strategy hybrid --bench same_size --size 24 --json
-./build/bench_runner --strategy hybrid --bench same_size --size 1024 --json
-```
-
-These runs expose different failure modes:
-
-- small same-size tests reward slab/tcache hot paths;
-- random tests expose bin and size-class behavior;
-- fragmentation tests expose coalescing and realloc policy;
-- cross-thread tests expose the lack of owner-thread remote-free lists.
-
-## 8. External Benchmark Suites
-
-The project provides a helper script for external benchmarks:
+The helper script is:
 
 ```bash
 scripts/external_bench.sh --help
 ```
 
-External benchmark artifacts are kept outside the tracked source tree:
+It uses:
 
 ```text
-external/          downloaded external benchmark repositories
-results/external/  timestamped benchmark logs
+external/          downloaded external repositories
+results/external/  timestamped raw logs
 ```
 
-Both directories are ignored by Git except for their `.gitignore` placeholders.
+These directories are ignored by Git except placeholder files.
 
-### mimalloc-bench
+## 8. mimalloc-bench
 
-`mimalloc-bench` is a practical allocator benchmark suite used by the mimalloc project. It collects classic allocator tests and application-like workloads including Larson-style server workloads, alloc-test, cache-scratch, xmalloc-test, cfrac, espresso, lean, and z3.
+`mimalloc-bench` is a practical allocator benchmark suite used by the mimalloc project. It includes classic allocator tests such as Larson, alloc-test, cache-scratch, rptest, cfrac, espresso, and others.
 
-Repository:
-
-```text
-https://github.com/daanx/mimalloc-bench
-```
-
-Typical flow:
+Setup and build:
 
 ```bash
 scripts/external_bench.sh setup-mimalloc-bench
 scripts/external_bench.sh build-mimalloc-bench bench
-scripts/external_bench.sh run-mimalloc-bench larson alloc-test cscratch
 ```
 
-The runner executes each selected mimalloc-bench test with:
-
-- glibc system malloc;
-- this project in default `MY_MALLOC_MODE=hybrid`;
-- this project in `MY_MALLOC_MODE=ptmalloc`.
-
-Logs are written to `results/external/`.
-
-When using external suites, compare against at least:
-
-- system glibc malloc;
-- jemalloc;
-- tcmalloc;
-- mimalloc;
-- this project in default `hybrid` mode;
-- this project in `MY_MALLOC_MODE=ptmalloc` mode.
-
-`build-mimalloc-bench all` can download and build more allocators and benchmark programs, but it may need many packages and significantly more time:
+Run selected tests:
 
 ```bash
-scripts/external_bench.sh build-mimalloc-bench all
+scripts/external_bench.sh run-mimalloc-bench rptest larson alloc-test glibc-thread
 ```
 
-If the official `mimalloc-bench` build is blocked by missing local tools such as `unzip`, the helper script falls back to a local CMake build of the core benchmark binaries. In that fallback, shbench binaries are stubs and should not be reported; use core tests such as `larson`, `alloc-test`, `cscratch`, `xmalloc-test`, `glibc-simple`, and `glibc-thread`.
+For each selected test, the script runs:
 
-### glibc benchtests
+```text
+glibc system malloc
+my_malloc hybrid mode through LD_PRELOAD
+my_malloc ptmalloc mode through LD_PRELOAD
+```
 
-glibc has its own `benchtests`, including malloc/tcache hot-path tests. These are useful for studying ptmalloc-like behavior and tcache fast paths, but they are not a complete cross-allocator benchmark suite.
+Important environment note: if the official `mimalloc-bench` build is blocked by missing tools such as `unzip`, the script falls back to a local CMake build of core benchmarks. In that fallback, shbench binaries are stubs and must not be reported.
 
-This project does not vendor glibc. Point the script at an existing glibc source/build tree:
+## 9. Redis
+
+Redis is a useful server-style workload with many small allocations and a client/server benchmark shape.
+
+Build Redis through `mimalloc-bench`:
+
+```bash
+scripts/external_bench.sh build-mimalloc-bench redis
+```
+
+Run the Redis benchmark:
+
+```bash
+scripts/external_bench.sh run-redis
+```
+
+The script starts Redis three times:
+
+```text
+glibc server
+hybrid server through LD_PRELOAD
+ptmalloc server through LD_PRELOAD
+```
+
+It then runs:
+
+```bash
+redis-benchmark -r 1000000 -n 100000 -q -P 16 lpush a 1 2 3 4 5 lrange a 1 5
+```
+
+Codex sandbox note: Redis needs local TCP sockets. In a restricted sandbox it may fail with `Can't create socket: Operation not permitted`. Run the script outside the sandbox or with approved network permissions.
+
+## 10. glibc Benchtests
+
+glibc has allocator benchtests, but this project does not vendor glibc.
+
+Use an existing glibc source/build tree:
 
 ```bash
 GLIBC_SRC=/path/to/glibc scripts/external_bench.sh run-glibc-benchtests "$GLIBC_SRC"
 ```
 
-You can also name specific malloc benchtests:
+Specific tests:
 
 ```bash
 GLIBC_SRC=/path/to/glibc scripts/external_bench.sh run-glibc-benchtests "$GLIBC_SRC" malloc-thread malloc-simple malloc-tcache
 ```
 
-The script runs each available benchtest once with glibc, once with this project in hybrid mode, and once with this project in ptmalloc mode. Missing benchtest names are reported and skipped because glibc benchtest names differ by version.
+If the named tests are not present in that glibc tree, the script reports and skips them.
 
-### Real Application Workloads
-
-Allocator microbenchmarks are easy to overfit. Add real programs when possible:
-
-- Redis or another server with many small objects;
-- SQLite or RocksDB for mixed allocation lifetimes;
-- clang or another compiler workload;
-- Lua, Python, or Z3 for application-like allocation patterns;
-- producer/consumer services to test cross-thread frees.
-
-The helper script includes smoke workloads for locally installed tools:
+## 11. Real Application Smoke Tests
 
 ```bash
 scripts/external_bench.sh run-real-apps
 ```
 
-It currently checks:
+The script runs available tools and skips missing ones:
 
 | Tool | Workload |
 |---|---|
-| `sqlite3` | In-memory insert/select workload. |
-| `clang++` | Syntax-check this project's `bench_runner.cpp`. |
-| `lua` | Build a large table of strings. |
-| `z3` | Solve a tiny SMT input through stdin. |
-| `redis-server` | Detection only; use `redis-benchmark` in a prepared Redis setup. |
+| `sqlite3` | In-memory insert/select workload |
+| `clang++` | Syntax-check project source |
+| `lua` | Large table of strings; Redis-vendored Lua is used if system Lua is missing |
+| `z3` | Tiny SMT input |
+| `redis-server` | Detection only; use `run-redis` for the actual server benchmark |
 
-Missing tools are skipped and recorded in the log.
+## 12. Reporting Rules
 
-### Run All Available External Tests
+A benchmark result should include:
 
-```bash
-scripts/external_bench.sh run-all
-```
-
-`run-all` does the following:
-
-1. Clone or update `mimalloc-bench`.
-2. Run mimalloc-bench if `external/mimalloc-bench/out/bench` already exists.
-3. Run glibc benchtests if `GLIBC_SRC` is set.
-4. Run real-application smoke workloads for installed tools.
-
-This command intentionally does not auto-build the full mimalloc-bench environment because that can install/download a large dependency set and may require system packages.
-
-## 9. Reporting Rules
-
-When documenting results, include:
-
-- CPU model and core count;
-- OS and kernel version;
-- compiler and optimization flags;
-- allocator commit hash;
-- strategy and exact benchmark command;
-- warm-up policy if any;
-- ops/sec and elapsed time;
+- commit hash;
+- compiler and flags;
+- CPU and OS;
+- exact command;
+- allocator strategy;
+- workload parameters;
+- elapsed time;
+- throughput;
 - peak RSS;
-- notes about variance across multiple runs.
+- number of repetitions;
+- skipped tests and why they were skipped.
 
-Do not compare one allocator's best profile against another allocator's different profile. Use the same command matrix for every strategy.
+Do not compare:
 
-## 10. Current Limitations
+- one allocator's best run against another allocator's average run;
+- different workload parameters;
+- fallback/stub external benchmarks as if they were official suite results;
+- sandbox-failed Redis runs as allocator failures.
 
-The built-in runner is intentionally simple:
+## 13. Current Result Summary
 
-- it reports throughput and peak RSS, not full latency histograms;
-- `latency_sample` is a rough smoke check, not a rigorous percentile benchmark;
-- it does not yet report live bytes, mapped bytes, or internal fragmentation directly;
-- it does not yet support aligned allocation or calloc-specific strategy methods;
-- cross-thread free is synthetic and should be complemented by real producer/consumer workloads.
+Latest selected external run on May 5, 2026:
 
-The next useful improvement is to add a structured result file with repeated runs and summary statistics:
+| Workload | glibc | hybrid | ptmalloc mode |
+|---|---:|---:|---:|
+| `rptest` | 782,679 memory ops/CPU sec | 556,053 | 465,142 |
+| `larson` | 33,747,387 ops/sec | 18,017,391 | 71,349 |
+| `alloc-test` | 1.2B ops in 23,506 ms | 36,845 ms | 40,488 ms |
+| `glibc-thread` | 158,122,468 iterations | 20,510,225 | 56,143,923 |
+| Redis pipelined command | 184,162 req/sec | 139,665 | 74,516 |
 
-```text
-run_id, strategy, benchmark, params, iteration, ops_per_sec, p50, p99, peak_rss_kb
-```
+Interpretation:
 
-That would make performance regressions easier to track over time.
+- The allocator now passes the selected external LD_PRELOAD workloads.
+- Hybrid mode is useful on Redis relative to ptmalloc mode, but still trails glibc.
+- RSS is still high on mixed/fragmentation-style workloads.
+- Larson exposes severe ptmalloc-mode scalability weakness.
+- The next meaningful performance work is empty slab/span reclamation, remote-free ownership, and better size-class/batch tuning.
+
+Detailed raw-result notes are in [external_benchmark_results.md](external_benchmark_results.md).

@@ -1,84 +1,62 @@
-# my_ptmalloc
+# my_malloc
 
-A C++17 hybrid memory allocator. It keeps a ptmalloc-style arena/bin fallback for medium and large allocations, and adds a non-ptmalloc slab fast path for small objects. Drop-in replacement via `LD_PRELOAD` for benchmarking, educational inspection, and experimentation.
+`my_malloc` is a C++17 learning-oriented memory allocator. It can be used as an `LD_PRELOAD` malloc replacement, and it also provides a strategy/benchmark lab for comparing different allocator designs.
 
-## Features
+The project is not a production replacement for glibc malloc, jemalloc, tcmalloc, or mimalloc. Its purpose is to make their important ideas visible in a smaller codebase: chunks, bins, arenas, tcache, slab allocation, central free lists, pluggable strategies, and configurable benchmarks.
 
-- **Small-object slab path** -- normal allocations up to 1024 bytes use 64KB aligned slabs, 16-byte size classes, thread-local free lists, central per-class batch refill/drain, and lock-free slab lookup on free
-- **Tcache** -- 76 thread-local cached bins (64 small + 12 large), 16 entries per bin, with safe-linking (XOR pointer mangling) and double-free detection
-- **Fastbins** -- 10 lock-free CAS bins for chunks up to 160 bytes
-- **Small bins** -- 64 exact-fit FIFO bins (16-byte granularity)
-- **Large bins** -- 62 sorted bins with best-fit search and binmap skipping for empty ranges
-- **Unsorted bin** -- bounded staging scan, exact-match tcache refill, and safe last-remainder reuse
-- **Multi-arena** -- cache-line-aligned arenas (`alignas(128)`) with per-thread arena creation/reuse and `HeapInfo` ownership lookup on free
-- **Coalescing** -- forward + backward chunk merging with top-chunk absorption
-- **Static thresholds** -- fixed mmap/trim thresholds via `mallopt` (adaptive policy exists but is not wired in)
-- **Strong types** -- `ChunkSize`, `UserSize`, `FastbinIdx`, etc. with `constexpr` index computation
-- **LD_PRELOAD hooks** -- full C-linkage `malloc`/`free`/`calloc`/`realloc`/`memalign`/`posix_memalign`/`aligned_alloc`/`mallopt`/`malloc_usable_size`
-- **Bootstrap buffer** -- static per-thread buffers for pre-init allocations before `dlsym` resolves
-- **Allocator lab controls** -- runtime backend selection with `MY_MALLOC_MODE`, opt-in stats with `MY_MALLOC_STATS=1`, and optional trace ring with `MY_MALLOC_TRACE=1`
-- **Pluggable strategy API** -- built-in `hybrid`, `ptmalloc`, and `libc` strategies plus external plugin loading through `my_malloc_get_strategy`
-- **Validation and benchmark harness** -- `allocator_validate` checks custom strategies before `bench_runner` measures them
-- **Debug gating** -- hot-path metadata checks and stderr logging are compiled out unless `MY_PTMALLOC_ENABLE_DEBUG=1` is defined
+## What This Project Implements
 
-## Architecture
+The default mode is a hybrid allocator:
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    Public API                        │
-│  my_malloc / my_free / my_calloc / my_realloc / ... │
-├─────────────────────────────────────────────────────┤
-│              Hybrid Allocation Front End             │
-│  Small Slab Path (<=1024B) OR ptmalloc-style path   │
-├─────────────────────────────────────────────────────┤
-│             ptmalloc-style Fallback Pipeline         │
-│  TcacheAlloc → FastbinAlloc → SmallbinAlloc →       │
-│  UnsortedAlloc → LargebinAlloc → TopChunkAlloc →    │
-│  SysAlloc (mmap/new_heap)                           │
-├──────────────┬──────────────┬───────────────────────┤
-│   Tcache     │   FastBins   │   BinManager          │
-│  (per-thread │  (lock-free  │  ┌─────────────────┐  │
-│   76 bins)   │    CAS)      │  │ SmallBins (64)  │  │
-│              │              │  │ LargeBins (62)  │  │
-│              │              │  │ UnsortedBin (1) │  │
-│              │              │  │ BinMap          │  │
-│              │              │  └─────────────────┘  │
-├──────────────┴──────────────┴───────────────────────┤
-│                    Arena                             │
-│  alignas(128), mutex, top chunk, last_remainder     │
-├─────────────────────────────────────────────────────┤
-│  ArenaManager ← ThreadRegistry ← SysMemory (mmap)  │
-└─────────────────────────────────────────────────────┘
+```text
+small objects <= 1024B
+    -> slab frontend with thread-local free lists and central batch refill
+
+medium / large / aligned / fallback allocations
+    -> ptmalloc-style chunk allocator with tcache, fastbins, bins, arenas, top chunk, mmap
 ```
 
-## Learning Documents
+Main features:
 
-| Document | Focus |
-|----------|-------|
-| [docs/allocator_design.md](docs/allocator_design.md) | Concrete system design: slab layout, chunk layout, arena/bin relationships, allocation/free/realloc paths, and implemented optimizations. |
-| [docs/allocator_families.md](docs/allocator_families.md) | Allocator-family guide: ptmalloc, tcmalloc-like slab allocation, jemalloc-like extent ideas, mimalloc-like remote-free ideas, adaptive direction, and what this project implements or simplifies. |
-| [docs/allocator_lab.md](docs/allocator_lab.md) | Lab guide: strategy API, external plugins, validation, benchmarking, JSON output, and how to add custom strategies. |
-| [docs/benchmarking.md](docs/benchmarking.md) | Configurable benchmark guide: profiles, individual benchmark methods, parameters, JSON output, and external suites such as mimalloc-bench/glibc benchtests/real apps. |
-| [docs/external_benchmark_results.md](docs/external_benchmark_results.md) | Current external benchmark run notes, including mimalloc-bench results, skipped tests, environment blockers, and next fix targets. |
+| Area | Implemented feature |
+|---|---|
+| Public API | `malloc`, `free`, `calloc`, `realloc`, `memalign`, `posix_memalign`, `aligned_alloc`, `mallopt`, `malloc_usable_size` |
+| Drop-in usage | `LD_PRELOAD=./build/libmy_ptmalloc.so ./program` |
+| Modes | `MY_MALLOC_MODE=hybrid` and `MY_MALLOC_MODE=ptmalloc` |
+| ptmalloc path | boundary-tag chunks, tcache, fastbins, small bins, unsorted bin, large bins, binmap, arenas, top chunk, mmap |
+| slab path | 16-byte size classes up to 1024B, 64KB slabs, thread-local lists, central per-class batch refill/drain |
+| Learning tools | heap inspector, statistics, trace option, strategy API, plugin example |
+| Benchmarks | built-in configurable benchmark runner plus external `mimalloc-bench`, Redis, and real-application smoke hooks |
 
-### Allocation Flow
+## Architecture At A Glance
 
-1. **Slab fast path** -- normal allocations up to 1024 bytes use fixed-size slab objects and bypass chunk headers
-2. **Tcache fallback** -- thread-local, lock-free, O(1) for chunk-backed small sizes that bypass slab, such as aligned allocations
-3. **Fastbins** -- global, CAS lock-free, O(1) for tiny chunk-backed sizes
-4. **Small bins** -- exact-fit FIFO under arena lock
-5. **Unsorted bin** -- bounded scan, exact matches can refill current tcache class, other chunks are sorted into bins
-6. **Large bins** -- binmap-assisted best-fit search in sorted bins
-7. **Top chunk** -- carve from arena's top chunk
-8. **System** -- `mmap` for large chunks, `new_heap` for arena growth
+```text
+User program
+  |
+  v
+malloc/free/realloc hooks
+  |
+  v
+my_malloc public API
+  |
+  +-- hybrid small-object frontend
+  |      |
+  |      +-- thread-local slab lists
+  |      +-- central class caches
+  |      +-- 64KB slab lookup table
+  |
+  +-- ptmalloc-style fallback
+         |
+         +-- tcache
+         +-- fastbins
+         +-- small bins
+         +-- unsorted bin
+         +-- large bins + binmap
+         +-- top chunk
+         +-- mmap / heap growth
+```
 
-### Deallocation Flow
-
-1. **Slab pointer lookup** -- slab-backed small objects return to the current thread-local slab list
-2. **Tcache** -- if chunk-backed and in tcache range and not full, push to thread-local bin
-3. **Consolidation** -- merge chunk-backed allocations with adjacent free chunks
-4. **Top merge** -- if adjacent to top chunk, absorb into top
-5. **Unsorted bin** -- place consolidated chunk for deferred sorting
+For the detailed design, read [docs/allocator_design.md](docs/allocator_design.md).
 
 ## Build
 
@@ -87,312 +65,153 @@ cmake -B build .
 cmake --build build -j$(nproc)
 ```
 
-### Build Targets
+Important build targets:
 
-| Target | Description |
-|--------|-------------|
-| `my_ptmalloc` | Shared library (`.so`) for `LD_PRELOAD` |
-| `my_ptmalloc_static` | Static library for linking tests |
-| `test_basic` | Unit tests (26 tests) |
+| Target | Purpose |
+|---|---|
+| `my_ptmalloc` | Shared library for `LD_PRELOAD` |
+| `my_ptmalloc_static` | Static library used by tests/tools |
+| `test_basic` | Basic correctness tests |
 | `test_tcache` | Tcache-specific tests |
 | `test_stress` | Multi-threaded stress test |
-| `test_perf` | Internal performance benchmark |
-| `bench_my` | Comparison benchmark (my_ptmalloc) |
-| `bench_sys` | Comparison benchmark (glibc) |
-| `heap_inspect` | Heap state inspection tool |
-| `allocator_validate` | Correctness validator for built-in or plugin strategies |
-| `bench_runner` | Standardized benchmark runner for built-in or plugin strategies |
-| `example_counting_strategy` | Example plugin wrapping libc malloc with counters |
+| `allocator_validate` | Validates built-in or plugin strategies |
+| `bench_runner` | Configurable benchmark runner |
+| `heap_inspect` | Heap inspection tool |
+| `example_counting_strategy` | Example external allocator strategy plugin |
 
-### Run Tests
+## Run Tests
 
 ```bash
-cd build && ctest --output-on-failure
+ctest --test-dir build --output-on-failure
 ```
 
-## Usage
-
-### As LD_PRELOAD Replacement
+Validate allocator strategies:
 
 ```bash
-# Replace system malloc for any program
+./build/allocator_validate --strategy hybrid
+./build/allocator_validate --strategy ptmalloc
+./build/allocator_validate --strategy libc
+```
+
+Run with `LD_PRELOAD`:
+
+```bash
+LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=hybrid ./build/test_basic
+LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=ptmalloc ./build/test_basic
+```
+
+## Use As A Drop-in Allocator
+
+```bash
 LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
-
-# With debug output
-LD_PRELOAD=./build/libmy_ptmalloc.so MALLOC_TRACE=/tmp/trace.log ./your_program
 ```
 
-### C++ API
+Switch allocator mode:
+
+```bash
+MY_MALLOC_MODE=hybrid   LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
+MY_MALLOC_MODE=ptmalloc LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
+```
+
+Enable optional observability:
+
+```bash
+MY_MALLOC_STATS=1 LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
+MY_MALLOC_TRACE=1 LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
+```
+
+## Use From C++
 
 ```cpp
 #include "my_ptmalloc/my_malloc.h"
 
 void* p = my_ptmalloc::my_malloc(1024);
+p = my_ptmalloc::my_realloc(p, 2048);
+size_t usable = my_ptmalloc::my_malloc_usable_size(p);
 my_ptmalloc::my_free(p);
-
-void* p2 = my_ptmalloc::my_calloc(10, 100);  // zero-initialized
-void* p3 = my_ptmalloc::my_realloc(p2, 2000);
-void* p4 = my_ptmalloc::my_memalign(64, 4096);  // aligned
-
-size_t usable = my_ptmalloc::my_malloc_usable_size(p4);
 ```
 
-### Runtime Tuning
+Aligned allocation:
 
 ```cpp
-// Set mmap threshold (bytes above this use mmap instead of heap)
-my_ptmalloc::my_mallopt(M_MMAP_THRESHOLD, 131072);
-
-// Set trim threshold (release memory to OS when top chunk exceeds this)
-my_ptmalloc::my_mallopt(M_TRIM_THRESHOLD, 128 * 1024);
+void* p = my_ptmalloc::my_memalign(64, 4096);
+my_ptmalloc::my_free(p);
 ```
 
-### Allocator Lab Controls
+## Benchmark
 
-```bash
-# Default: hybrid slab + ptmalloc-style fallback
-./build/bench_my
-
-# Baseline: disable the slab frontend and use the ptmalloc-style path
-MY_MALLOC_MODE=ptmalloc ./build/bench_my
-
-# Opt into counters; disabled by default to keep hot paths fast
-MY_MALLOC_STATS=1 ./build/test_basic
-
-# Enable the trace ring; also enables stats
-MY_MALLOC_TRACE=1 ./build/test_basic
-```
-
-Programmatic stats API:
-
-```cpp
-auto stats = my_ptmalloc::my_malloc_stats_snapshot();
-my_ptmalloc::my_malloc_dump_stats_json(stdout);
-my_ptmalloc::my_malloc_stats_reset();
-```
-
-### Strategy Plugins
-
-Validate and benchmark built-in strategies:
-
-```bash
-./build/allocator_validate --strategy hybrid
-./build/allocator_validate --strategy ptmalloc
-./build/bench_runner --strategy hybrid --json
-./build/bench_runner --strategy libc --json
-```
-
-Run configurable benchmark profiles:
+Built-in benchmarks:
 
 ```bash
 ./build/bench_runner --strategy hybrid --profile smoke
 ./build/bench_runner --strategy hybrid --profile micro
 ./build/bench_runner --strategy hybrid --profile stress --json
-./build/bench_runner --strategy hybrid --bench fragmentation --iters 100000 --slots 4096
+./build/bench_runner --strategy ptmalloc --profile all --json
+./build/bench_runner --strategy libc --profile all --json
 ```
 
-Set up external benchmark suites:
+Run individual workloads:
+
+```bash
+./build/bench_runner --strategy hybrid --bench same_size --size 64 --iters 1000000
+./build/bench_runner --strategy hybrid --bench random --random-iters 500000 --slots 8192
+./build/bench_runner --strategy hybrid --bench fragmentation --iters 100000 --min-size 16 --max-size 16384
+./build/bench_runner --strategy hybrid --bench cross_thread_free --threads 8 --batch 10000
+```
+
+External benchmarks:
 
 ```bash
 scripts/external_bench.sh setup-mimalloc-bench
 scripts/external_bench.sh build-mimalloc-bench bench
-scripts/external_bench.sh run-mimalloc-bench larson alloc-test cscratch
+scripts/external_bench.sh build-mimalloc-bench redis
+scripts/external_bench.sh run-mimalloc-bench rptest larson alloc-test glibc-thread
+scripts/external_bench.sh run-redis
 scripts/external_bench.sh run-real-apps
 ```
 
-Build and run the example plugin:
+Full benchmark instructions and current results:
 
-```bash
-cmake --build build --target example_counting_strategy
-./build/allocator_validate --strategy plugin:./build/libcounting_malloc_strategy.so
-./build/bench_runner --strategy plugin:./build/libcounting_malloc_strategy.so --json
-```
+| Document | Contents |
+|---|---|
+| [docs/benchmarking.md](docs/benchmarking.md) | Built-in profiles, parameters, JSON output, external benchmark commands |
+| [docs/external_benchmark_results.md](docs/external_benchmark_results.md) | Latest external run notes, Redis results, skipped tests, known environment blockers |
 
-## Benchmark Results
+## Documentation Map
 
-Tested on Linux x86_64, `-O2 -march=native`, on May 4, 2026. Each benchmark runs identical workloads against both allocators. Ratios are my_ptmalloc / glibc for throughput (higher is better).
+| Document | Read this for |
+|---|---|
+| [docs/allocator_design.md](docs/allocator_design.md) | Overall system architecture, data structure relationships, allocation/free/realloc paths |
+| [docs/allocator_families.md](docs/allocator_families.md) | Detailed allocator principles: ptmalloc, tcmalloc, jemalloc, mimalloc, and how this project maps to them |
+| [docs/allocator_lab.md](docs/allocator_lab.md) | How to add custom allocator strategies and compare them in the same benchmark harness |
+| [docs/benchmarking.md](docs/benchmarking.md) | Benchmark methodology and commands |
+| [docs/external_benchmark_results.md](docs/external_benchmark_results.md) | Current performance observations |
 
-### Throughput (ops/sec)
+## Current Performance Snapshot
 
-| Benchmark | glibc malloc | my_ptmalloc | Ratio |
-|-----------|-------------|-------------|-------|
-| Same-size 32B (10M alloc+free) | 55,987,979 | 59,176,399 | 1.06x |
-| Same-size 64B (10M alloc+free) | 46,724,193 | 49,816,401 | 1.07x |
-| Same-size 256B (10M alloc+free) | 29,476,384 | 30,933,507 | 1.05x |
-| Batch 512x1000 (512k alloc+free) | 22,195,518 | 31,582,863 | 1.42x |
-| Random alloc/free/realloc (200k) | 2,169,171 | 1,149,705 | 0.53x |
-| Large 8-128KB (30k alloc+free) | 155,854 | 212,936 | 1.37x |
-| Fragmentation (5k reallocs) | 36,338,003 | 10,977,093 | 0.30x |
-| Multi-thread 4x50k (200k total) | 2,879,837 | 3,893,444 | 1.35x |
+The latest external run shows that the project is now usable under selected LD_PRELOAD workloads, but it is still behind glibc on several broader workloads.
 
-### Memory Footprint (Peak RSS)
+Examples from the May 5, 2026 local run:
 
-| Benchmark | glibc malloc | my_ptmalloc | Overhead |
-|-----------|-------------|-------------|----------|
-| Random alloc/free | 16,896 KB | 22,784 KB | 1.3x |
-| Same-size / batch | 17,024 KB | 22,912 KB | 1.3x |
-| Large alloc | 20,152 KB | 22,912 KB | 1.1x |
-| Fragmentation | 20,152 KB | 23,808 KB | 1.2x |
-| Multi-thread | 101,144 KB | 117,760 KB | 1.2x |
+| Workload | glibc | hybrid | ptmalloc mode |
+|---|---:|---:|---:|
+| `rptest` | 782,679 memory ops/CPU sec | 556,053 | 465,142 |
+| `larson` | 33,747,387 ops/sec | 18,017,391 | 71,349 |
+| `alloc-test` | 1.2B ops in 23,506 ms | 36,845 ms | 40,488 ms |
+| Redis pipelined command | 184,162 req/sec | 139,665 | 74,516 |
 
-### Analysis
+The results are useful for learning because they expose concrete design tradeoffs:
 
-- **Small-object hot path**: 32B, 64B, and 256B are slightly faster than glibc in this run while avoiding per-object chunk headers.
-- **Batch operations**: more than 2x glibc in this run because repeated <=1024B allocations stay on thread-local slab lists and refill/drain in batches through the central cache.
-- **Random alloc/free/realloc**: still slower than glibc, but improved over the previous ptmalloc-only path because many small allocations avoid arena/bin logic.
-- **Large allocations**: faster than glibc in this run, mainly due to earlier coalescing/trim work and less retained heap state.
-- **Multi-threaded**: now faster than glibc in this run after central per-class batch refill/drain reduced per-thread slab isolation.
-- **Fragmentation microbench**: improved again, from the previous documented 9,328,898 ops/sec to 10,977,093 ops/sec. It remains behind glibc because slab spans are not reclaimed and realloc policy is still simpler.
+- slab allocation helps some small-object server workloads;
+- the current slab layer still needs empty-slab reclamation and better remote-free handling;
+- ptmalloc-style bins are easier to study but can become very slow under some multi-threaded workloads;
+- glibc remains significantly more optimized in fragmentation, lock contention, and long-running reuse behavior.
 
-### Backend Comparison
+## Current Limitations
 
-`MY_MALLOC_MODE=ptmalloc` disables the slab frontend and exercises the ptmalloc-style backend. In the same run, the baseline backend produced:
-
-| Benchmark | ptmalloc-style backend |
-|-----------|------------------------|
-| Random alloc/free/realloc | 977,860 ops/sec |
-| Same-size 32B | 45,851,423 ops/sec |
-| Same-size 64B | 40,085,427 ops/sec |
-| Same-size 256B | 31,645,253 ops/sec |
-| Batch 512x1000 | 28,357,378 ops/sec |
-| Large 8-128KB | 165,725 ops/sec |
-| Fragmentation | 5,296,223 ops/sec |
-| Multi-thread 4x50k | 5,030,526 ops/sec |
-
-This mode is mainly for learning and regression comparisons; the default hybrid mode is the primary optimized path.
-
-### Optimization Notes
-
-This version implements the planned hot-path optimizations:
-
-- `my_malloc` first routes normal <=1024B allocations through a slab allocator with 16-byte size classes, 64KB aligned slabs, and per-class central batch refill/drain.
-- `my_malloc` tries tcache before calling `ArenaManager::get_arena`, so tcache hits avoid arena mutexes completely.
-- `ArenaManager::get_arena` creates/reuses per-thread arenas up to `ncpus * ARENA_MULTIPLIER`; non-main heap regions are `HEAP_MAX_SIZE` aligned so `HeapInfo::arena_for_chunk` can map frees back to owners.
-- `UnsortedBin::scan_and_sort` has a fixed scan budget, exact-match tcache refill, and avoids arbitrary first-fit splitting that caused fragmentation in random workloads.
-- `LargeBins` uses `BinMap::find_first_from` to skip empty large-bin ranges before walking a sorted list.
-- `BinManager::unlink_free_chunk` centralizes unlinking from unsorted, small, and large bins, so coalescing can safely merge chunks that have already been sorted out of unsorted.
-- `my_realloc` can now grow in place by absorbing the top chunk or the next linked free chunk, splitting any usable remainder back to unsorted.
-- Top-chunk merges call `systrim` using the configured threshold policy.
-- Slab pointer lookup uses an immutable atomic table after slab registration, avoiding a global mutex on every small-object free.
-- Thread-local slab caches refill in batches from central lists and drain surplus objects back to central lists.
-- Debug validation and `fprintf` calls in hot code are behind `MY_PTMALLOC_ENABLE_DEBUG`.
-
-See:
-
-- [docs/allocator_design.md](docs/allocator_design.md) for the concrete internal data structures and allocation/free paths.
-- [docs/allocator_families.md](docs/allocator_families.md) for ptmalloc, tcmalloc-like slab, jemalloc-like, mimalloc-like, adaptive, and plugin strategy principles, including what this project implements and simplifies.
-- [docs/allocator_lab.md](docs/allocator_lab.md) for the learning-oriented strategy/plugin/validation/benchmark guide.
-- [docs/benchmarking.md](docs/benchmarking.md) for configurable benchmark profiles, individual test methods, parameters, JSON output, and external suites such as mimalloc-bench.
-
-## Project Structure
-
-```
-my_ptmalloc/
-├── CMakeLists.txt
-├── README.md
-├── docs/
-│   ├── allocator_design.md       # Concrete current implementation design
-│   ├── allocator_families.md     # Allocator-family principles and project tradeoffs
-│   ├── allocator_lab.md          # Strategy/plugin/benchmark learning guide
-│   ├── benchmarking.md           # Configurable benchmark guide
-│   └── external_benchmark_results.md # External benchmark run notes
-├── include/my_ptmalloc/
-│   ├── config.h              # Platform constants (constexpr)
-│   ├── types.h               # Strong types: ChunkSize, UserSize, BinIndex
-│   ├── chunk.h               # Chunk struct with size/flag methods
-│   ├── intrusive_list.h      # Doubly-linked circular list for bins
-│   ├── fastbins.h            # Lock-free CAS fastbins
-│   ├── small_bins.h          # 64 exact-fit FIFO bins
-│   ├── large_bins.h          # 62 sorted bins with best-fit
-│   ├── unsorted_bin.h        # Single staging bin
-│   ├── bin_map.h             # Bitmap for bin occupancy
-│   ├── bin_manager.h         # Facade composing all bin types
-│   ├── tcache.h              # Thread-local cache with safe-linking
-│   ├── arena.h               # Cache-line-aligned arena
-│   ├── heap.h                # HeapInfo for non-main arenas
-│   ├── sys_memory.h          # Abstract system memory source
-│   ├── threshold.h           # Adaptive mmap/trim thresholds
-│   ├── coalesce.h            # Configurable coalescing policy
-│   ├── observer.h            # AllocObserver for stats/debug
-│   ├── allocator_lab.h       # Optional stats and trace API
-│   ├── slab_allocator.h      # Headerless small-object slab allocator
-│   ├── strategy.h            # Pluggable strategy API
-│   ├── thread_registry.h     # Thread lifecycle management
-│   ├── arena_manager.h       # Arena creation/selection
-│   ├── alloc_pipeline.h      # Chain-of-responsibility allocation
-│   ├── my_malloc.h           # Public C++ API
-│   └── hooks.h               # LD_PRELOAD C linkage
-├── src/
-│   ├── init.cpp              # Global initialization
-│   ├── large_bins.cpp        # Large bin best-fit search
-│   ├── unsorted_bin.cpp      # Unsorted bin scan + sort
-│   ├── tcache.cpp            # Tcache lifecycle
-│   ├── heap.cpp              # Heap allocation (mmap-based)
-│   ├── sys_memory.cpp        # MmapMemory implementation
-│   ├── threshold.cpp         # Adaptive thresholds
-│   ├── coalesce.cpp          # Coalescing policies
-│   ├── observer.cpp          # Stats/debug observers
-│   ├── thread_registry.cpp   # Thread management
-│   ├── arena_manager.cpp     # Arena selection strategy
-│   ├── alloc_pipeline.cpp    # Allocation strategy pipeline
-│   ├── malloc_impl.cpp       # _int_malloc
-│   ├── free_impl.cpp         # _int_free with consolidation
-│   ├── realloc_impl.cpp      # _int_realloc
-│   ├── slab_allocator.cpp    # Slab frontend and central per-class cache
-│   ├── allocator_lab.cpp     # Opt-in stats and trace implementation
-│   ├── strategy.cpp          # Built-in strategy descriptors
-│   ├── consolidate.cpp       # malloc_consolidate + systrim
-│   ├── hooks.cpp             # LD_PRELOAD interposition
-│   └── my_malloc.cpp         # Public API wrappers
-├── plugins/
-│   └── counting_malloc_strategy.cpp # Example external strategy plugin
-├── scripts/
-│   └── external_bench.sh # External benchmark suite integration
-├── external/
-│   └── .gitignore        # Downloaded external benchmarks live here
-├── results/
-│   └── .gitignore        # Timestamped benchmark logs live here
-├── test/
-│   ├── test_basic.cpp        # Unit tests
-│   ├── test_tcache.cpp       # Tcache tests
-│   ├── test_stress.cpp       # Multi-threaded stress
-│   ├── test_perf.cpp         # Internal perf benchmark
-│   └── bench_compare.cpp     # glibc vs my_ptmalloc comparison
-└── tools/
-    ├── heap_inspect.cpp      # Heap state inspection
-    ├── allocator_validate.cpp # Strategy correctness validator
-    ├── bench_runner.cpp      # Standard strategy benchmark runner
-    └── strategy_loader.h     # Built-in/plugin strategy loader
-```
-
-## Design Decisions
-
-### Why C++ instead of C?
-
-glibc's malloc.c is ~5700 lines of C with heavy macro usage. This reimplementation uses:
-- Strong types to prevent size-class confusion at compile time
-- RAII for arena locking (`ArenaGuard`)
-- `constexpr` for index computation
-- Classes for bin types with clear encapsulation
-- `alignas` for cache-line isolation
-
-### Why not restore fd_nextsize chain yet?
-
-The `fd_nextsize`/`bk_nextsize` secondary chain in large bins is a performance optimization (O(1) skip to next size class). However, it's fundamentally fragile because:
-- Chunk memory overlaps with user data when allocated
-- `consolidate_and_free` merges chunks without updating large bin chains
-- Stale pointers from previously-allocated chunks can cause infinite loops
-
-Large bins now use binmap-assisted search over sorted fd/bk lists. This keeps the correctness of one linked-list representation while avoiding scans over empty large-bin ranges. Restoring `fd_nextsize` is still possible, but it should be done together with complete chain maintenance in split, unlink, and coalescing paths.
-
-## Limitations
-
-- `systrim` is triggered on top merges, but not yet on every possible heap-growth/free path
-- Thread-local tcache is flushed on thread exit, but cleanup is not automatically wired into the OS thread destructor path yet
-- No `malloc_info` / `malloc_stats` implementation
-- No `mallopt` hooks for all glibc tuning parameters
-- `realloc` can grow into the top chunk or next linked free chunk, but still lacks several glibc-grade cases such as mmap remap and broader shrink/split heuristics
-
-## License
-
-Educational/research project. See source files for details.
+- Empty slabs are cached but not yet returned to the OS.
+- Cross-thread slab frees do not yet use owner-thread remote-free queues.
+- The size-class table is simple 16-byte spacing, not a production-tuned table.
+- Large allocation and extent management are simpler than jemalloc/tcmalloc/mimalloc.
+- Adaptive strategy selection exists as a project direction, but the current runtime modes are still coarse.
+- External benchmark coverage depends on local tools such as Redis, glibc benchtests, SQLite, clang, Z3, jemalloc, tcmalloc, and mimalloc.

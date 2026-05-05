@@ -1,87 +1,142 @@
-# External Benchmark Run Notes
+# External Benchmark Results
 
-This file records the external benchmark run performed on May 5, 2026 in the local development environment. Raw logs are written under `results/external/` and are intentionally ignored by Git.
+This document records the latest external benchmark status from the local development environment on May 5, 2026. Raw logs are written under `results/external/` and are ignored by Git.
 
-## Environment
+For commands and methodology, read [benchmarking.md](benchmarking.md).
+
+## 1. Environment
 
 | Item | Value |
 |---|---|
 | OS | Ubuntu 22.04.5 LTS |
-| CPU workers used by scripts | 12 |
-| Project build | `build/libmy_ptmalloc.so` |
-| External suite | `external/mimalloc-bench` cloned from `https://github.com/daanx/mimalloc-bench` |
-| Build mode | Official `build-bench-env.sh bench` attempted, then local fallback CMake build used |
+| Worker count used by scripts | 12 |
+| Allocator library | `build/libmy_ptmalloc.so` |
+| External suite | `external/mimalloc-bench` |
+| Redis source | `external/mimalloc-bench/extern/redis-6.2.7` |
+| Build mode | Core `mimalloc-bench` fallback plus Redis build |
 
-The official `mimalloc-bench` build was blocked by local environment issues:
+Environment blockers:
 
-- `unzip` is not installed;
-- `sudo apt-get` could not run because this session has no interactive password input;
-- the MicroQuill shbench zip download did not match the checksum expected by `mimalloc-bench`.
+| Blocker | Effect |
+|---|---|
+| `unzip` not installed | Official `mimalloc-bench` shbench setup could not complete. |
+| `sudo -n true` requires password | System packages could not be installed from this session. |
+| MicroQuill shbench download returned wrong content/checksum | shbench results are not valid and are not reported. |
+| No local glibc source tree | glibc benchtests were not run. |
+| `sqlite3`, `clang++`, `z3` missing | These real-app smoke workloads were skipped. |
+| Sandbox blocks local TCP sockets | Redis must be run outside the restricted sandbox or with approved network permissions. |
 
-The integration script therefore used its fallback path: it built the core `mimalloc-bench` binaries through the suite's CMake project and generated shbench stubs only to let CMake configure. shbench results should not be reported from this run.
+## 2. Crash Fixes Before Latest Run
 
-## Commands Run
+Earlier LD_PRELOAD runs exposed `MY_MALLOC_MODE=ptmalloc` crashes. The latest run was performed after these fixes:
+
+| Area | Problem | Fix |
+|---|---|---|
+| Allocator initialization | `AllocPipeline` used `std::vector`; vector construction could call `operator new`, re-enter `malloc`, and call the pipeline before global initialization completed. | Replace strategy storage with fixed `std::array<AllocStrategy*, 7>`. |
+| Hook bootstrap | Some early allocations were served by libc malloc during hook initialization, then later freed through this allocator. | Track real-bootstrap pointers and route their `free`/`realloc` back to libc. |
+| `memalign` | Alignment requests `<= MALLOC_ALIGNMENT` took the aligned split path even though normal malloc already satisfies the alignment. Stress tests could corrupt bin links. | Route those requests directly to `my_malloc`. |
+
+Validation after fixes:
+
+```bash
+cmake --build build -j2
+ctest --test-dir build --output-on-failure
+./build/allocator_validate --strategy hybrid
+./build/allocator_validate --strategy ptmalloc
+LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=ptmalloc ./build/test_basic
+```
+
+All of the above passed.
+
+## 3. Commands Run
 
 ```bash
 scripts/external_bench.sh setup-mimalloc-bench
 scripts/external_bench.sh build-mimalloc-bench bench
-scripts/external_bench.sh run-mimalloc-bench larson alloc-test cscratch glibc-simple glibc-thread xmalloc-test malloc-large
-scripts/external_bench.sh run-mimalloc-bench larson-sized cthrash mstress mleak rptest cfrac espresso barnes
+scripts/external_bench.sh build-mimalloc-bench redis
+scripts/external_bench.sh run-mimalloc-bench rptest larson alloc-test glibc-thread
+scripts/external_bench.sh run-redis
 scripts/external_bench.sh run-real-apps
 ```
 
-glibc benchtests were not run because no local glibc source/build tree with `benchtests/` was found. `run-real-apps` found that `sqlite3`, `clang++`, `lua`, `z3`, and `redis-server` were not installed, so those real-application smoke workloads were skipped.
+`run-redis` was executed outside the restricted sandbox because Redis needs local TCP sockets.
 
-## mimalloc-bench Core Results
+## 4. mimalloc-bench Results
 
-The table reports wall-clock elapsed time and peak RSS from `/usr/bin/time`. Lower elapsed time is better. Lower RSS is usually better, but it should be interpreted together with workload behavior.
+Lower elapsed time is better. Higher throughput/iteration counts are better. RSS is peak resident set size from `/usr/bin/time`.
 
-| Benchmark | glibc elapsed | glibc RSS KB | hybrid elapsed | hybrid RSS KB | ptmalloc mode |
+| Benchmark | Allocator | Main metric | Elapsed | Peak RSS KB | Status |
+|---|---|---:|---:|---:|---|
+| `rptest` | glibc | 782,679 memory ops/CPU sec | 0:17.22 | 53,620 | pass |
+| `rptest` | hybrid | 556,053 memory ops/CPU sec | 0:16.02 | 113,532 | pass |
+| `rptest` | ptmalloc | 465,142 memory ops/CPU sec | 0:17.22 | 112,296 | pass |
+| `larson` | glibc | 33,747,387 ops/sec | 0:07.09 | 78,088 | pass |
+| `larson` | hybrid | 18,017,391 ops/sec | 0:07.14 | 290,432 | pass |
+| `larson` | ptmalloc | 71,349 ops/sec | 0:08.36 | 46,720 | pass |
+| `alloc-test` | glibc | 1.2B ops in 23,506 ms | 0:23.51 | 15,616 | pass |
+| `alloc-test` | hybrid | 1.2B ops in 36,845 ms | 0:36.85 | 27,776 | pass |
+| `alloc-test` | ptmalloc | 1.2B ops in 40,488 ms | 0:40.52 | 132,864 | pass |
+| `glibc-thread` | glibc | 158,122,468 iterations | 0:02.01 | 3,200 | pass |
+| `glibc-thread` | hybrid | 20,510,225 iterations | 0:02.03 | 51,072 | pass |
+| `glibc-thread` | ptmalloc | 56,143,923 iterations | 0:02.01 | 13,056 | pass |
+
+Note: one older `ptmalloc/rptest` log still contains a SIGSEGV from before the final successful rerun. An immediate GDB run and a later full rerun completed normally.
+
+## 5. Redis Result
+
+Redis command:
+
+```bash
+redis-benchmark -r 1000000 -n 100000 -q -P 16 lpush a 1 2 3 4 5 lrange a 1 5
+```
+
+| Allocator | Requests/sec | p50 | Elapsed | Peak RSS KB | Status |
 |---|---:|---:|---:|---:|---|
-| `larson` | 0:07.13 | 78,388 | 0:07.16 | 341,888 | SIGSEGV |
-| `larson-sized` | 0:07.12 | 78,572 | 0:07.16 | 336,768 | SIGSEGV |
-| `alloc-test` | 0:21.56 | 15,360 | 0:25.79 | 33,664 | SIGSEGV |
-| `cscratch` | 0:00.58 | 3,712 | 0:00.61 | 4,096 | SIGSEGV |
-| `cthrash` | 0:00.64 | 3,712 | 0:00.66 | 3,968 | SIGSEGV |
-| `glibc-simple` | 0:05.87 | 2,048 | 0:08.19 | 3,456 | SIGSEGV |
-| `glibc-thread` | 0:02.00 | 3,456 | 0:02.03 | 47,616 | SIGSEGV |
-| `xmalloc-test` | 0:05.04 | 73,404 | 0:05.01 | 9,544 | SIGSEGV |
-| `malloc-large` | 0:05.31 | 534,192 | 0:31.53 | 410,032 | SIGSEGV |
-| `mstress` | 0:03.19 | 315,052 | 0:04.19 | 938,288 | SIGSEGV |
-| `mleak` | 0:06.07 | 2,048 | 0:06.52 | 203,136 | SIGSEGV |
-| `rptest` | 0:16.02 | 49,592 | 0:16.03 | 130,440 | SIGSEGV |
-| `cfrac` | 0:09.86 | 2,944 | 0:12.19 | 4,480 | SIGSEGV |
-| `espresso` | 0:07.46 | 2,304 | 0:08.27 | 9,216 | SIGSEGV |
-| `barnes` | 0:04.37 | 58,368 | 0:05.35 | 60,032 | SIGSEGV |
+| glibc | 184,162.06 | 3.935 ms | 0:00.55 | 3,840 | pass |
+| hybrid | 139,664.80 | 5.383 ms | 0:00.72 | 3,840 | pass |
+| ptmalloc | 74,515.65 | 9.863 ms | 0:01.35 | 3,840 | pass |
 
-Additional workload-specific outputs:
+Interpretation:
 
-| Benchmark | glibc output | hybrid output |
+- Hybrid mode is much closer to glibc than ptmalloc mode on this Redis workload.
+- The slab frontend helps the server-style small-object pattern.
+- Hybrid still trails glibc, so the current slab implementation is not yet production-level.
+
+## 6. Real Application Smoke Tests
+
+`run-real-apps` result:
+
+| Tool | Result |
+|---|---|
+| SQLite | skipped, `sqlite3` not installed |
+| clang++ | skipped, `clang++` not installed |
+| Lua | passed using Redis-vendored Lua |
+| Z3 | skipped, `z3` not installed |
+| Redis | Redis is built; use `run-redis` for the actual benchmark |
+
+Lua workload output:
+
+```text
+200000  199999:39999600001
+```
+
+## 7. What The Results Mean
+
+The allocator is now correct enough to survive the selected external LD_PRELOAD tests, but its performance gap is still clear.
+
+Observed gaps:
+
+| Gap | Evidence | Likely cause |
 |---|---|---|
-| `larson` | 27,689,364 ops/sec | 21,563,728 ops/sec |
-| `larson-sized` | 28,457,840 ops/sec | 21,233,367 ops/sec |
-| `alloc-test` | 1.2B operations in 21,557 ms | 1.2B operations in 25,783 ms |
-| `xmalloc-test` | `rtime: 5.101`, `free/sec: 19.604 M` | `rtime: 25.815`, `free/sec: 3.874 M` |
-| `rptest` | 669,230 memory ops/CPU second | 500,025 memory ops/CPU second |
+| High RSS on `rptest` | hybrid/ptmalloc RSS is about 2x glibc | No empty slab/span release and weaker reuse policy |
+| Poor ptmalloc Larson throughput | ptmalloc mode far behind glibc/hybrid | Arena/bin contention and slow fallback path |
+| Hybrid slower than glibc on Redis | 139k req/sec vs 184k req/sec | Slab frontend helps, but batch/size-class/cache policy is not tuned |
+| Hybrid weak on `glibc-thread` | far fewer iterations than glibc | Thread-local/central handoff overhead and simplified cache design |
 
-## Interpretation
+## 8. Next Benchmark Work
 
-The hybrid allocator is functional under the external core benchmark set, but it is usually slower than glibc on these broader workloads and often uses more RSS. The important exceptions are workload-specific: `xmalloc-test` shows similar elapsed time and lower peak RSS in this run, but its own printed `rtime/free/sec` metric is worse for hybrid, so it needs deeper interpretation.
-
-The `ptmalloc` runtime mode is not externally robust yet. It crashes quickly under every `mimalloc-bench` core workload tested through `LD_PRELOAD`. This should be treated as a correctness bug in the ptmalloc-only path before using that mode for external comparisons.
-
-The main performance gaps exposed by this run match the current architecture limitations:
-
-- no empty slab/span reclamation, causing high RSS on several workloads;
-- no owner-thread remote-free lists, hurting cross-thread and producer/consumer patterns;
-- simplified large allocation/page management, visible in `malloc-large`;
-- ptmalloc-only mode has a crash bug under external LD_PRELOAD workloads;
-- no tuned size-class table or span/page-map layer yet.
-
-## Next Fix Targets
-
-1. Reproduce and fix the ptmalloc-mode SIGSEGV under a smaller external test, starting with `glibc-simple` or `cscratch`.
-2. Add empty slab/span accounting and return fully empty slabs to a central span cache or the OS.
-3. Add owner-thread remote-free lists for slab objects.
-4. Add structured parsing for `results/external/*.log` so benchmark reports can be generated automatically.
-5. Re-run after installing `unzip` and full `mimalloc-bench` dependencies, then include `sh6bench`, `sh8bench`, Redis, RocksDB, Lua, Z3, and allocator comparisons against jemalloc/tcmalloc/mimalloc.
+1. Add repeated-run summary generation from `results/external/*.log`.
+2. Add variance reporting: min, median, p95, standard deviation.
+3. Add live bytes, mapped bytes, free bytes, and slab/arena hit-rate counters.
+4. Install or provide `unzip`, glibc source, SQLite, clang, Z3, jemalloc, tcmalloc, and mimalloc for broader comparison.
+5. Re-run the same matrix after implementing empty slab/span release and remote-free queues.

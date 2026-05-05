@@ -3,7 +3,7 @@
 // Each strategy is tried in priority order until one succeeds
 
 #include "arena.h"
-#include <vector>
+#include <array>
 
 namespace my_ptmalloc {
 
@@ -60,7 +60,7 @@ class AllocPipeline {
     TopChunkAlloc topchunk_;
     SysAlloc      sys_;
 
-    std::vector<AllocStrategy*> strategies_;
+    std::array<AllocStrategy*, 7> strategies_;
 
 public:
     AllocPipeline() noexcept;

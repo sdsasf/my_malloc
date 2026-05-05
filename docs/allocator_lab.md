@@ -1,119 +1,72 @@
-# my_malloc Allocator Lab Guide
+# Allocator Lab Guide
 
-This project is now structured as a learning-oriented allocator laboratory. It contains real allocator implementations, a strategy/plugin API, validation tools, benchmark tools, and documentation for comparing allocator design choices.
+This project is also a small allocator laboratory. It lets you run built-in allocators, add your own allocator strategy, validate correctness, and measure performance with the same benchmark harness.
 
-The goal is not to claim full jemalloc/tcmalloc/mimalloc compatibility. The goal is to expose their important ideas as experimental modes and make those ideas measurable.
+## 1. Why A Strategy Lab Exists
 
-For a more detailed explanation of each allocator family, the features implemented by this project, and the simplifications made for learning, read [allocator_families.md](allocator_families.md). For benchmark profiles, benchmark parameters, JSON output, and external suites, read [benchmarking.md](benchmarking.md).
+Allocator comparisons are easy to make unfair. A meaningful comparison needs:
 
-## 1. Quick Start
+- the same workload;
+- the same process shape;
+- the same number of iterations;
+- correctness checks before benchmark runs;
+- machine-readable output;
+- clear notes about environment and missing external tools.
 
-Build everything:
+The strategy API exists so that different allocator designs can be tested behind the same interface.
 
-```bash
-cmake -B build .
-cmake --build build -j$(nproc)
+```mermaid
+flowchart TB
+    Bench["bench_runner"]
+    Validate["allocator_validate"]
+    API["StrategyDescriptor + StrategyVTable"]
+    Hybrid["hybrid"]
+    Ptmalloc["ptmalloc"]
+    Libc["libc"]
+    Plugin["plugin:path.so"]
+
+    Validate --> API
+    Bench --> API
+    API --> Hybrid
+    API --> Ptmalloc
+    API --> Libc
+    API --> Plugin
 ```
 
-Run correctness validation:
+## 2. Built-in Strategies
+
+| Strategy | What it uses | Purpose |
+|---|---|---|
+| `hybrid` | Slab frontend plus ptmalloc-style fallback | Default experimental allocator |
+| `ptmalloc` | Chunk/bin/arena allocator only | Baseline for studying ptmalloc ideas |
+| `libc` / `glibc` | System malloc | Reference baseline |
+| `plugin:path.so` | External shared library | User-defined allocator experiments |
+
+Run validation:
 
 ```bash
 ./build/allocator_validate --strategy hybrid
 ./build/allocator_validate --strategy ptmalloc
-./build/allocator_validate --strategy plugin:./build/libcounting_malloc_strategy.so
+./build/allocator_validate --strategy libc
 ```
 
-Run standardized benchmarks:
-
-```bash
-./build/bench_runner --strategy hybrid
-./build/bench_runner --strategy ptmalloc
-./build/bench_runner --strategy libc
-./build/bench_runner --strategy plugin:./build/libcounting_malloc_strategy.so
-```
-
-Run named benchmark profiles:
+Run benchmarks:
 
 ```bash
 ./build/bench_runner --strategy hybrid --profile smoke
-./build/bench_runner --strategy hybrid --profile micro
-./build/bench_runner --strategy hybrid --profile stress
-./build/bench_runner --strategy hybrid --profile all --json
+./build/bench_runner --strategy ptmalloc --profile smoke
+./build/bench_runner --strategy libc --profile smoke
 ```
 
-Run individual configurable benchmark methods:
+## 3. Strategy Interface
 
-```bash
-./build/bench_runner --strategy hybrid --bench same_size --size 32 --iters 1000000
-./build/bench_runner --strategy hybrid --bench random --random-iters 500000 --slots 8192
-./build/bench_runner --strategy hybrid --bench fragmentation --iters 100000 --min-size 16 --max-size 16384
-./build/bench_runner --strategy hybrid --bench cross_thread_free --threads 8 --batch 10000
-```
-
-Machine-readable output:
-
-```bash
-./build/bench_runner --strategy hybrid --json
-```
-
-Run the LD_PRELOAD allocator:
-
-```bash
-LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
-```
-
-Switch runtime mode:
-
-```bash
-MY_MALLOC_MODE=hybrid ./build/bench_my
-MY_MALLOC_MODE=ptmalloc ./build/bench_my
-```
-
-Enable observability:
-
-```bash
-MY_MALLOC_STATS=1 ./build/test_basic
-MY_MALLOC_TRACE=1 ./build/test_basic
-```
-
-## 2. Project Architecture
-
-```mermaid
-flowchart TB
-    User["User program / benchmark"]
-    Hooks["malloc/free/realloc hooks"]
-    Core["Allocator core"]
-    StrategyAPI["Strategy API<br/>StrategyDescriptor + VTable"]
-    Builtin["Built-in strategies<br/>hybrid / ptmalloc / libc"]
-    Plugin["External plugin<br/>.so exports my_malloc_get_strategy"]
-    Validate["allocator_validate"]
-    Bench["bench_runner"]
-    Docs["JSON / Markdown reports"]
-
-    User --> Hooks --> Core
-    Validate --> StrategyAPI
-    Bench --> StrategyAPI
-    StrategyAPI --> Builtin
-    StrategyAPI --> Plugin
-    Bench --> Docs
-```
-
-There are two ways to use the project:
-
-- As a drop-in allocator through `LD_PRELOAD`.
-- As a lab framework through `allocator_validate` and `bench_runner`.
-
-The lab framework is the recommended path for comparing new allocator strategies.
-
-## 3. Strategy API
-
-External strategies expose one C symbol:
+A plugin exports one C symbol:
 
 ```cpp
 extern "C" my_ptmalloc::StrategyDescriptor my_malloc_get_strategy() noexcept;
 ```
 
-The descriptor contains a function table:
+The descriptor contains metadata and a function table:
 
 ```cpp
 struct StrategyVTable {
@@ -127,358 +80,118 @@ struct StrategyVTable {
 };
 ```
 
-The simple example plugin is:
+Minimum requirements:
+
+- `allocate(size)` returns null on failure.
+- `deallocate(nullptr)` is allowed and must do nothing.
+- `reallocate(nullptr, size)` behaves like `allocate(size)`.
+- `reallocate(ptr, 0)` may free and return null.
+- Returned pointers must satisfy normal malloc alignment.
+- `usable_size(ptr)` should return at least the requested size when known; returning 0 for unknown is acceptable for simple experiments.
+
+## 4. Example Plugin
+
+The repository includes a simple plugin:
 
 ```text
 plugins/counting_malloc_strategy.cpp
 ```
 
-It wraps libc `malloc/free/realloc`, counts calls, and exports `my_malloc_get_strategy`.
+It wraps libc malloc, counts calls, and exposes those counters through the strategy stats hook.
 
-Build target:
+Build it:
 
 ```bash
 cmake --build build --target example_counting_strategy
 ```
 
-Use it:
+Validate it:
 
 ```bash
 ./build/allocator_validate --strategy plugin:./build/libcounting_malloc_strategy.so
-./build/bench_runner --strategy plugin:./build/libcounting_malloc_strategy.so --json
 ```
 
-## 4. Built-in Strategies
-
-| Strategy | What it means | Purpose |
-|---|---|---|
-| `hybrid` | Small-object slab frontend plus ptmalloc-style fallback | Default optimized experimental allocator |
-| `ptmalloc` | Disables slab frontend and uses chunk/bin/arena path | Baseline for learning ptmalloc concepts |
-| `libc` / `glibc` | Uses system `malloc/free/realloc` | External baseline |
-| `plugin:path.so` | Loads a user-defined strategy | Custom allocator experiments |
-
-## 5. Current Hybrid Backend
-
-```mermaid
-flowchart TD
-    M["my_malloc(size)"]
-    Small{"size <= 1024<br/>normal allocation?"}
-    Slab["Slab frontend<br/>16-byte size classes"]
-    TC["Thread-local slab list"]
-    Central["Central class cache<br/>batch refill/drain"]
-    Fallback["ptmalloc-style fallback"]
-    Tcache["tcache"]
-    Bins["fast/small/unsorted/large bins"]
-    Top["top chunk / mmap"]
-
-    M --> Small
-    Small -- yes --> Slab --> TC
-    TC -- empty --> Central
-    Small -- no --> Fallback
-    Fallback --> Tcache --> Bins --> Top
-```
-
-Important characteristics:
-
-- Small normal allocations avoid per-object chunk headers.
-- Slabs are 64KB aligned.
-- Each size class is spaced by 16 bytes up to 1024 bytes.
-- Thread caches refill from central lists in batches.
-- Surplus thread-local objects drain back to central lists.
-- Aligned allocation currently bypasses slab because it still manipulates chunk headers.
-
-## 6. ptmalloc-style Backend
-
-```mermaid
-flowchart LR
-    Tcache["tcache"]
-    Fast["fastbins"]
-    Small["small bins"]
-    Unsorted["unsorted bin"]
-    Large["large bins + binmap"]
-    Top["top chunk"]
-    Sys["mmap/new heap"]
-
-    Tcache --> Fast --> Small --> Unsorted --> Large --> Top --> Sys
-```
-
-This backend teaches classic ptmalloc mechanisms:
-
-- chunk boundary tags;
-- `PREV_INUSE`, `IS_MMAPPED`, `NON_MAIN_ARENA`;
-- tcache;
-- fastbins;
-- small bins;
-- unsorted bin sorting;
-- large bin best-fit;
-- top chunk growth;
-- multiple arenas.
-
-It is useful for comparing older chunk/bin/coalescing architecture against the newer slab/central-cache path.
-
-## 7. Allocator Families and Key Ideas
-
-The project can grow toward several allocator-inspired modes. These are educational interpretations of important design ideas, not full upstream clones.
-
-### ptmalloc-like
-
-Core idea:
-
-```text
-chunk metadata + bins + arenas + coalescing
-```
-
-Strengths:
-
-- Good for learning boundary tags and coalescing.
-- Handles realloc-heavy cases naturally when adjacent chunks can merge.
-- Mature conceptual model for general malloc semantics.
-
-Weaknesses:
-
-- Bin scans and arena locks can hurt multi-threaded small-object workloads.
-- Per-object chunk metadata costs memory and cache bandwidth.
-
-### tcmalloc-like
-
-Core idea:
-
-```text
-ThreadCache -> CentralFreeList -> PageHeap
-```
-
-Strengths:
-
-- Very fast same-size and batch small-object workloads.
-- Batch refill/drain reduces lock traffic.
-- PageHeap can make large allocation management simple.
-
-Weaknesses:
-
-- RSS can rise if thread caches hold too much memory.
-- Cross-thread free needs careful transfer/remote handling.
-
-Current project status:
-
-- Implemented: small-object thread cache and central per-class batch cache.
-- Missing: full PageHeap and span reclamation.
-
-### jemalloc-like
-
-Core idea:
-
-```text
-many arenas + size-class bins + extents + decay/purge
-```
-
-Strengths:
-
-- Strong multi-threaded mixed-size behavior.
-- Good RSS control through dirty/muzzy extent decay.
-- Arena sharding limits global contention.
-
-Weaknesses:
-
-- Extent state and decay policy are complex.
-- More metadata and policy tuning.
-
-Future experiment:
-
-- Add arena-local extent caches.
-- Add dirty span decay timers or allocation-count windows.
-- Compare RSS on long-running mixed-size workloads.
-
-### mimalloc-like
-
-Core idea:
-
-```text
-per-thread heap + page-local allocation + remote free list
-```
-
-Strengths:
-
-- Excellent thread-local locality.
-- Cross-thread free is explicit and cheap when remote lists are well designed.
-- Page reset can reduce RSS.
-
-Weaknesses:
-
-- Requires robust page ownership and remote-free draining.
-- Thread exit and owner migration need careful handling.
-
-Future experiment:
-
-- Add `owner_thread` to span metadata.
-- Add atomic remote free lists.
-- Add producer/consumer cross-thread benchmark.
-
-## 8. Adaptive Policies
-
-Adaptive mode should choose strategies based on measured workload behavior, not names.
-
-```mermaid
-flowchart TD
-    Stats["Runtime stats window"]
-    Policy["Adaptive policy"]
-    Choice["Backend / parameter choice"]
-    Exec["Allocation execution"]
-    Observe["Observe throughput, RSS, misses"]
-
-    Stats --> Policy --> Choice --> Exec --> Observe --> Stats
-```
-
-Recommended policy plugins:
-
-| Policy | How it works | Why useful |
-|---|---|---|
-| `heuristic` | Rules based on hit rate, RSS/live ratio, remote free rate | Easy to understand and debug |
-| `bandit` | Treats backends as arms and optimizes reward | Lightweight online learning |
-| `offline_table` | Loads a trained table from file | Lets RL-style training happen outside hot path |
-
-Example heuristic:
-
-```text
-if size <= 1024 and slab hit rate is high:
-    prefer tcmalloc-like slab path
-if remote free rate is high:
-    prefer mimalloc-like remote-free path
-if mapped/live ratio is high:
-    prefer jemalloc-like decay/purge behavior
-if realloc move rate is high:
-    prefer chunk/coalescing path
-```
-
-The current project has the stats/trace foundation and runtime mode selection. The next step is a pluggable policy interface that updates decisions per size class or per workload window.
-
-## 9. Validation
-
-Every strategy should pass validation before benchmarking:
+Benchmark it:
 
 ```bash
-./build/allocator_validate --strategy hybrid
-./build/allocator_validate --strategy ptmalloc
-./build/allocator_validate --strategy plugin:./build/libcounting_malloc_strategy.so
+./build/bench_runner --strategy plugin:./build/libcounting_malloc_strategy.so --profile micro --json
 ```
 
-Validation currently checks:
+## 5. Suggested Workflow For A New Allocator Idea
 
-- basic allocate/free;
-- zero-size allocation;
-- realloc growth and data preservation;
-- randomized allocate/free/realloc stress.
+1. Implement a plugin strategy in `plugins/your_strategy.cpp`.
+2. Build it as a CMake module or compile it manually as a shared object.
+3. Run `allocator_validate`.
+4. Run `bench_runner --profile smoke`.
+5. Run focused workloads that match the idea.
+6. Compare with `hybrid`, `ptmalloc`, and `libc`.
+7. Record results and limitations.
 
-Future validation work:
-
-- aligned allocation validation through strategy API;
-- cross-thread free validation;
-- redzone/guard mode;
-- longer randomized stress with reproducible seeds.
-
-## 10. Benchmarking
-
-Run one strategy:
+Example comparison matrix:
 
 ```bash
-./build/bench_runner --strategy hybrid
+for s in hybrid ptmalloc libc plugin:./build/libyour_strategy.so; do
+  ./build/allocator_validate --strategy "$s"
+  ./build/bench_runner --strategy "$s" --profile micro --json
+  ./build/bench_runner --strategy "$s" --profile stress --json
+done
 ```
 
-JSON output:
+## 6. Matching Ideas To Benchmarks
 
-```bash
-./build/bench_runner --strategy hybrid --json
-```
+| Allocator idea | Useful benchmark |
+|---|---|
+| Tcache or thread-local cache | `same_size`, `batch`, `glibc-thread` |
+| Size-class tuning | `same_size`, `random`, `fragmentation` |
+| Coalescing policy | `fragmentation`, `random` |
+| Remote-free design | `cross_thread_free`, Redis, producer/consumer workloads |
+| Large allocation policy | `malloc-large`, large-size built-in tests |
+| Empty span release | `fragmentation`, `rptest`, long phase-changing workloads |
+| Lock contention reduction | `larson`, `alloc-test`, `cross_thread_free` |
 
-Plugin benchmark:
+## 7. Adaptive Experiments
 
-```bash
-./build/bench_runner --strategy plugin:./build/libcounting_malloc_strategy.so --json
-```
+A custom adaptive allocator should first expose metrics. Good metrics include:
 
-Current built-in workload methods:
+- allocation count by size class;
+- free count by size class;
+- tcache/slab/bin hit rate;
+- remote-free count;
+- mapped bytes;
+- active bytes;
+- cached free bytes;
+- number of empty slabs/spans;
+- arena lock contention;
+- p50/p99 allocation latency samples.
 
-- `same_size`;
-- `same_size_64`;
-- `same_size_256`;
-- `batch`;
-- `random`;
-- `fragmentation`;
-- `cross_thread_free`;
-- `latency_sample`.
-
-The runner supports profiles (`smoke`, `micro`, `stress`, `all`) and parameters such as `--iters`, `--random-iters`, `--size`, `--min-size`, `--max-size`, `--slots`, `--batch`, `--rounds`, `--threads`, and `--seed`. See [benchmarking.md](benchmarking.md) for the full benchmark guide and for external suites such as `mimalloc-bench`.
-
-Existing legacy benchmarks remain available:
-
-```bash
-./build/bench_my
-./build/bench_sys
-./build/test_perf
-```
-
-Future benchmark work:
-
-- producer/consumer cross-thread free;
-- long-running RSS/decay workload;
-- phase-changing workload for adaptive policies;
-- latency percentiles, not just throughput.
-
-## 11. How to Add a Custom Strategy
-
-1. Copy `plugins/counting_malloc_strategy.cpp`.
-2. Replace `allocate/deallocate/reallocate/usable_size`.
-3. Export `my_malloc_get_strategy`.
-4. Build a shared object.
-5. Run validation.
-6. Run benchmarks.
-
-Minimal skeleton:
-
-```cpp
-extern "C" my_ptmalloc::StrategyDescriptor my_malloc_get_strategy() noexcept {
-    return {
-        my_ptmalloc::STRATEGY_API_VERSION,
-        "my_strategy",
-        "description",
-        {
-            init,
-            shutdown,
-            allocate,
-            deallocate,
-            reallocate,
-            usable_size,
-            stats,
-        },
-    };
-}
-```
-
-Run:
-
-```bash
-./build/allocator_validate --strategy plugin:./libmy_strategy.so
-./build/bench_runner --strategy plugin:./libmy_strategy.so --json
-```
-
-## 12. Design Direction
-
-The next major architecture step is to introduce shared span metadata:
+Start with heuristic policies before reinforcement learning:
 
 ```text
-PageMap: page_id -> Span*
+if remote_free_ratio is high:
+    route frees through owner remote queues
 
-Span:
-  backend id
-  size class
-  owner thread
-  page count
-  free count
-  local/remote free lists
+if empty_slab_bytes is high:
+    release slabs to central cache or OS
+
+if size_class hit rate is high:
+    increase local batch size
+
+if RSS grows much faster than active bytes:
+    lower release threshold
 ```
 
-That layer will make it easier to implement:
+Reinforcement learning can be added later, but it needs stable observations and a reward function. For allocator experiments, a practical reward usually combines throughput, p99 latency, and memory overhead:
 
-- tcmalloc-like PageHeap;
-- jemalloc-like extent decay;
-- mimalloc-like remote free;
-- adaptive policy decisions by size class and span state.
+```text
+reward = throughput_score - latency_penalty - rss_penalty
+```
+
+Without reliable metrics, an RL policy will mostly learn benchmark noise.
+
+## 8. Notes For Contributors
+
+- Keep allocator metadata easy to inspect.
+- Add one policy at a time.
+- Benchmark against at least `hybrid`, `ptmalloc`, and `libc`.
+- Do not report external benchmark results if a dependency was stubbed or skipped.
+- Document simplifications clearly. This is a learning project, so knowing what is not implemented is as important as knowing what is implemented.

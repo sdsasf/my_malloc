@@ -41,6 +41,7 @@ void* my_memalign(size_t alignment, size_t size) noexcept {
 
     // Ensure alignment >= MALLOC_ALIGNMENT so chunk headers are always aligned
     if (alignment < MALLOC_ALIGNMENT) alignment = MALLOC_ALIGNMENT;
+    if (alignment <= MALLOC_ALIGNMENT) return my_malloc(size);
 
     size_t nb = request2size(UserSize{size}).value;
     ScopedSlabBypass bypass;
