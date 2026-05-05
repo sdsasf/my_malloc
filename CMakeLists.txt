@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Build shared library for LD_PRELOAD
-file(GLOB SOURCES src/*.cpp)
+file(GLOB SOURCES CONFIGURE_DEPENDS src/*.cpp)
 add_library(my_ptmalloc SHARED ${SOURCES})
 target_include_directories(my_ptmalloc PUBLIC include)
 target_link_libraries(my_ptmalloc PRIVATE pthread dl)

@@ -7,6 +7,7 @@
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/heap.h"
 #include "my_ptmalloc/slab_allocator.h"
+#include "my_ptmalloc/family_allocators.h"
 #include "my_ptmalloc/allocator_lab.h"
 #include "my_ptmalloc/types.h"
 #include <cstring>
@@ -45,6 +46,21 @@ void* my_realloc(void* ptr, size_t size) noexcept {
     if (size == 0) {
         my_free(ptr);
         return nullptr;
+    }
+
+    AllocMode mode = allocator_mode();
+    if (mode == AllocMode::TcmallocLike ||
+        mode == AllocMode::JemallocLike ||
+        mode == AllocMode::MimallocLike ||
+        mode == AllocMode::Adaptive) {
+        size_t family_usable = family_usable_size(ptr);
+        if (family_usable != 0) {
+            void* result = family_realloc(ptr, size);
+            if (allocator_trace_enabled_fast()) {
+                trace_record(AllocOp::Realloc, AllocPath::Slab, size, result);
+            }
+            return result;
+        }
     }
 
     size_t slab_usable = slab_usable_size(ptr);

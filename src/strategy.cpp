@@ -17,12 +17,32 @@ void noop_init() noexcept {}
 void noop_shutdown() noexcept {}
 
 void hybrid_init() noexcept {
-    setenv("MY_MALLOC_MODE", "hybrid", 0);
+    setenv("MY_MALLOC_MODE", "hybrid", 1);
     my_malloc_init();
 }
 
 void ptmalloc_init() noexcept {
-    setenv("MY_MALLOC_MODE", "ptmalloc", 0);
+    setenv("MY_MALLOC_MODE", "ptmalloc", 1);
+    my_malloc_init();
+}
+
+void tcmalloc_like_init() noexcept {
+    setenv("MY_MALLOC_MODE", "tcmalloc_like", 1);
+    my_malloc_init();
+}
+
+void jemalloc_like_init() noexcept {
+    setenv("MY_MALLOC_MODE", "jemalloc_like", 1);
+    my_malloc_init();
+}
+
+void mimalloc_like_init() noexcept {
+    setenv("MY_MALLOC_MODE", "mimalloc_like", 1);
+    my_malloc_init();
+}
+
+void adaptive_init() noexcept {
+    setenv("MY_MALLOC_MODE", "adaptive", 1);
     my_malloc_init();
 }
 
@@ -68,6 +88,74 @@ StrategyDescriptor ptmalloc_strategy_descriptor() noexcept {
         "Chunk/bin/arena backend with slab frontend disabled",
         StrategyVTable{
             ptmalloc_init,
+            noop_shutdown,
+            my_malloc,
+            my_free,
+            my_realloc,
+            my_malloc_usable_size,
+            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
+        },
+    };
+}
+
+StrategyDescriptor tcmalloc_like_strategy_descriptor() noexcept {
+    return StrategyDescriptor{
+        STRATEGY_API_VERSION,
+        "tcmalloc_like",
+        "Teaching size-class allocator with thread caches, central free lists, and 64KB spans",
+        StrategyVTable{
+            tcmalloc_like_init,
+            noop_shutdown,
+            my_malloc,
+            my_free,
+            my_realloc,
+            my_malloc_usable_size,
+            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
+        },
+    };
+}
+
+StrategyDescriptor jemalloc_like_strategy_descriptor() noexcept {
+    return StrategyDescriptor{
+        STRATEGY_API_VERSION,
+        "jemalloc_like",
+        "Teaching arena/run allocator with per-thread tcache and arena-local non-full runs",
+        StrategyVTable{
+            jemalloc_like_init,
+            noop_shutdown,
+            my_malloc,
+            my_free,
+            my_realloc,
+            my_malloc_usable_size,
+            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
+        },
+    };
+}
+
+StrategyDescriptor mimalloc_like_strategy_descriptor() noexcept {
+    return StrategyDescriptor{
+        STRATEGY_API_VERSION,
+        "mimalloc_like",
+        "Teaching per-thread heap/page allocator with owner remote-free queues",
+        StrategyVTable{
+            mimalloc_like_init,
+            noop_shutdown,
+            my_malloc,
+            my_free,
+            my_realloc,
+            my_malloc_usable_size,
+            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
+        },
+    };
+}
+
+StrategyDescriptor adaptive_strategy_descriptor() noexcept {
+    return StrategyDescriptor{
+        STRATEGY_API_VERSION,
+        "adaptive",
+        "Teaching adaptive mode: mimalloc-like tiny objects, tcmalloc-like small objects, direct mmap large objects",
+        StrategyVTable{
+            adaptive_init,
             noop_shutdown,
             my_malloc,
             my_free,

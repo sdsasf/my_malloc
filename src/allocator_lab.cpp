@@ -53,6 +53,14 @@ void allocator_lab_init() noexcept {
     const char* mode = std::getenv("MY_MALLOC_MODE");
     if (env_equals(mode, "ptmalloc")) {
         g_mode = AllocMode::PtmallocOnly;
+    } else if (env_equals(mode, "tcmalloc") || env_equals(mode, "tcmalloc_like")) {
+        g_mode = AllocMode::TcmallocLike;
+    } else if (env_equals(mode, "jemalloc") || env_equals(mode, "jemalloc_like")) {
+        g_mode = AllocMode::JemallocLike;
+    } else if (env_equals(mode, "mimalloc") || env_equals(mode, "mimalloc_like")) {
+        g_mode = AllocMode::MimallocLike;
+    } else if (env_equals(mode, "adaptive")) {
+        g_mode = AllocMode::Adaptive;
     } else {
         g_mode = AllocMode::Hybrid;
     }
@@ -194,7 +202,17 @@ void my_malloc_dump_stats_json(FILE* out) noexcept {
         "  \"paths\": {\"slab_alloc\": %llu, \"slab_free\": %llu, \"tcache_alloc\": %llu, \"tcache_free\": %llu, \"arena_alloc\": %llu, \"arena_free\": %llu, \"mmap_free\": %llu},\n"
         "  \"slab\": {\"refills\": %llu, \"drains\": %llu, \"new_slabs\": %llu}\n"
         "}\n",
-        allocator_mode() == AllocMode::Hybrid ? "hybrid" : "ptmalloc",
+        []() noexcept -> const char* {
+            switch (allocator_mode()) {
+                case AllocMode::Hybrid: return "hybrid";
+                case AllocMode::PtmallocOnly: return "ptmalloc";
+                case AllocMode::TcmallocLike: return "tcmalloc_like";
+                case AllocMode::JemallocLike: return "jemalloc_like";
+                case AllocMode::MimallocLike: return "mimalloc_like";
+                case AllocMode::Adaptive: return "adaptive";
+            }
+            return "unknown";
+        }(),
         static_cast<unsigned long long>(s.malloc_calls),
         static_cast<unsigned long long>(s.free_calls),
         static_cast<unsigned long long>(s.realloc_calls),

@@ -22,6 +22,10 @@ flowchart TB
     API["StrategyDescriptor + StrategyVTable"]
     Hybrid["hybrid"]
     Ptmalloc["ptmalloc"]
+    TC["tcmalloc_like"]
+    JE["jemalloc_like"]
+    MI["mimalloc_like"]
+    AD["adaptive"]
     Libc["libc"]
     Plugin["plugin:path.so"]
 
@@ -29,6 +33,10 @@ flowchart TB
     Bench --> API
     API --> Hybrid
     API --> Ptmalloc
+    API --> TC
+    API --> JE
+    API --> MI
+    API --> AD
     API --> Libc
     API --> Plugin
 ```
@@ -39,6 +47,10 @@ flowchart TB
 |---|---|---|
 | `hybrid` | Slab frontend plus ptmalloc-style fallback | Default experimental allocator |
 | `ptmalloc` | Chunk/bin/arena allocator only | Baseline for studying ptmalloc ideas |
+| `tcmalloc_like` | Thread caches, central free lists, 64KB spans | Study tcmalloc-style batching and size classes |
+| `jemalloc_like` | Arenas, size-class runs, per-thread tcache | Study arena/run organization |
+| `mimalloc_like` | Per-thread heaps, owned pages, remote-free queues | Study cross-thread free ownership |
+| `adaptive` | Size-based dispatcher over teaching modes | Study policy selection |
 | `libc` / `glibc` | System malloc | Reference baseline |
 | `plugin:path.so` | External shared library | User-defined allocator experiments |
 
@@ -47,6 +59,10 @@ Run validation:
 ```bash
 ./build/allocator_validate --strategy hybrid
 ./build/allocator_validate --strategy ptmalloc
+./build/allocator_validate --strategy tcmalloc_like
+./build/allocator_validate --strategy jemalloc_like
+./build/allocator_validate --strategy mimalloc_like
+./build/allocator_validate --strategy adaptive
 ./build/allocator_validate --strategy libc
 ```
 
@@ -55,6 +71,10 @@ Run benchmarks:
 ```bash
 ./build/bench_runner --strategy hybrid --profile smoke
 ./build/bench_runner --strategy ptmalloc --profile smoke
+./build/bench_runner --strategy tcmalloc_like --profile smoke
+./build/bench_runner --strategy jemalloc_like --profile smoke
+./build/bench_runner --strategy mimalloc_like --profile smoke
+./build/bench_runner --strategy adaptive --profile smoke
 ./build/bench_runner --strategy libc --profile smoke
 ```
 
@@ -124,13 +144,13 @@ Benchmark it:
 3. Run `allocator_validate`.
 4. Run `bench_runner --profile smoke`.
 5. Run focused workloads that match the idea.
-6. Compare with `hybrid`, `ptmalloc`, and `libc`.
+6. Compare with `hybrid`, `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, `mimalloc_like`, `adaptive`, and `libc`.
 7. Record results and limitations.
 
 Example comparison matrix:
 
 ```bash
-for s in hybrid ptmalloc libc plugin:./build/libyour_strategy.so; do
+for s in hybrid ptmalloc tcmalloc_like jemalloc_like mimalloc_like adaptive libc plugin:./build/libyour_strategy.so; do
   ./build/allocator_validate --strategy "$s"
   ./build/bench_runner --strategy "$s" --profile micro --json
   ./build/bench_runner --strategy "$s" --profile stress --json
@@ -192,6 +212,6 @@ Without reliable metrics, an RL policy will mostly learn benchmark noise.
 
 - Keep allocator metadata easy to inspect.
 - Add one policy at a time.
-- Benchmark against at least `hybrid`, `ptmalloc`, and `libc`.
+- Benchmark against at least `hybrid`, `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, `mimalloc_like`, `adaptive`, and `libc`.
 - Do not report external benchmark results if a dependency was stubbed or skipped.
 - Document simplifications clearly. This is a learning project, so knowing what is not implemented is as important as knowing what is implemented.

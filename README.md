@@ -6,7 +6,7 @@ The project is not a production replacement for glibc malloc, jemalloc, tcmalloc
 
 ## What This Project Implements
 
-The default mode is a hybrid allocator:
+The project now contains several runtime-selectable allocator strategies. The default mode is a hybrid allocator:
 
 ```text
 small objects <= 1024B
@@ -22,9 +22,13 @@ Main features:
 |---|---|
 | Public API | `malloc`, `free`, `calloc`, `realloc`, `memalign`, `posix_memalign`, `aligned_alloc`, `mallopt`, `malloc_usable_size` |
 | Drop-in usage | `LD_PRELOAD=./build/libmy_ptmalloc.so ./program` |
-| Modes | `MY_MALLOC_MODE=hybrid` and `MY_MALLOC_MODE=ptmalloc` |
+| Modes | `hybrid`, `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, `mimalloc_like`, `adaptive` |
 | ptmalloc path | boundary-tag chunks, tcache, fastbins, small bins, unsorted bin, large bins, binmap, arenas, top chunk, mmap |
 | slab path | 16-byte size classes up to 1024B, 64KB slabs, thread-local lists, central per-class batch refill/drain |
+| tcmalloc-like path | size classes up to 4096B, thread caches, central free lists, 64KB spans |
+| jemalloc-like path | multiple arenas, arena-local runs, per-thread tcache, size-class refill |
+| mimalloc-like path | per-thread heaps, page ownership, remote-free queues |
+| adaptive path | simple size-based dispatch across mimalloc-like, tcmalloc-like, and direct mmap paths |
 | Learning tools | heap inspector, statistics, trace option, strategy API, plugin example |
 | Benchmarks | built-in configurable benchmark runner plus external `mimalloc-bench`, Redis, and real-application smoke hooks |
 
@@ -111,6 +115,10 @@ Switch allocator mode:
 ```bash
 MY_MALLOC_MODE=hybrid   LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 MY_MALLOC_MODE=ptmalloc LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
+MY_MALLOC_MODE=tcmalloc_like LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
+MY_MALLOC_MODE=jemalloc_like LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
+MY_MALLOC_MODE=mimalloc_like LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
+MY_MALLOC_MODE=adaptive LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 ```
 
 Enable optional observability:
@@ -147,6 +155,10 @@ Built-in benchmarks:
 ./build/bench_runner --strategy hybrid --profile micro
 ./build/bench_runner --strategy hybrid --profile stress --json
 ./build/bench_runner --strategy ptmalloc --profile all --json
+./build/bench_runner --strategy tcmalloc_like --profile all --json
+./build/bench_runner --strategy jemalloc_like --profile all --json
+./build/bench_runner --strategy mimalloc_like --profile all --json
+./build/bench_runner --strategy adaptive --profile all --json
 ./build/bench_runner --strategy libc --profile all --json
 ```
 
@@ -183,6 +195,11 @@ Full benchmark instructions and current results:
 |---|---|
 | [docs/allocator_design.md](docs/allocator_design.md) | Overall system architecture, data structure relationships, allocation/free/realloc paths |
 | [docs/allocator_families.md](docs/allocator_families.md) | Detailed allocator principles: ptmalloc, tcmalloc, jemalloc, mimalloc, and how this project maps to them |
+| [docs/ptmalloc_design.md](docs/ptmalloc_design.md) | ptmalloc-style implementation details and simplifications |
+| [docs/tcmalloc_design.md](docs/tcmalloc_design.md) | tcmalloc-like size-class/span implementation |
+| [docs/jemalloc_design.md](docs/jemalloc_design.md) | jemalloc-like arena/run implementation |
+| [docs/mimalloc_design.md](docs/mimalloc_design.md) | mimalloc-like page ownership and remote-free implementation |
+| [docs/adaptive_allocator.md](docs/adaptive_allocator.md) | Current adaptive mode and future policy directions |
 | [docs/allocator_lab.md](docs/allocator_lab.md) | How to add custom allocator strategies and compare them in the same benchmark harness |
 | [docs/benchmarking.md](docs/benchmarking.md) | Benchmark methodology and commands |
 | [docs/external_benchmark_results.md](docs/external_benchmark_results.md) | Current performance observations |
@@ -213,5 +230,5 @@ The results are useful for learning because they expose concrete design tradeoff
 - Cross-thread slab frees do not yet use owner-thread remote-free queues.
 - The size-class table is simple 16-byte spacing, not a production-tuned table.
 - Large allocation and extent management are simpler than jemalloc/tcmalloc/mimalloc.
-- Adaptive strategy selection exists as a project direction, but the current runtime modes are still coarse.
+- Adaptive strategy selection currently uses a simple size-based rule, not a learned online policy.
 - External benchmark coverage depends on local tools such as Redis, glibc benchtests, SQLite, clang, Z3, jemalloc, tcmalloc, and mimalloc.

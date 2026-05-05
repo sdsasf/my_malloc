@@ -5,6 +5,7 @@
 #include "my_ptmalloc/arena_manager.h"
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/slab_allocator.h"
+#include "my_ptmalloc/family_allocators.h"
 #include "my_ptmalloc/allocator_lab.h"
 #include <cstring>
 #include <new>
@@ -42,6 +43,14 @@ void* my_memalign(size_t alignment, size_t size) noexcept {
     // Ensure alignment >= MALLOC_ALIGNMENT so chunk headers are always aligned
     if (alignment < MALLOC_ALIGNMENT) alignment = MALLOC_ALIGNMENT;
     if (alignment <= MALLOC_ALIGNMENT) return my_malloc(size);
+
+    AllocMode mode = allocator_mode();
+    if (mode == AllocMode::TcmallocLike ||
+        mode == AllocMode::JemallocLike ||
+        mode == AllocMode::MimallocLike ||
+        mode == AllocMode::Adaptive) {
+        return family_memalign(alignment, size);
+    }
 
     size_t nb = request2size(UserSize{size}).value;
     ScopedSlabBypass bypass;
@@ -139,6 +148,14 @@ int my_mallopt(int param, int value) noexcept {
 
 size_t my_malloc_usable_size(void* ptr) noexcept {
     if (!ptr) return 0;
+    AllocMode mode = allocator_mode();
+    if (mode == AllocMode::TcmallocLike ||
+        mode == AllocMode::JemallocLike ||
+        mode == AllocMode::MimallocLike ||
+        mode == AllocMode::Adaptive) {
+        size_t family_usable = family_usable_size(ptr);
+        if (family_usable != 0) return family_usable;
+    }
     size_t slab_usable = slab_usable_size(ptr);
     if (slab_usable != 0) return slab_usable;
     Chunk* p = Chunk::from_user_ptr(ptr);

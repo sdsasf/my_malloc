@@ -4,10 +4,11 @@ This document explains how the allocator is organized internally. It focuses on 
 
 ## 1. Design Goal
 
-`my_malloc` is a learning allocator with two goals:
+`my_malloc` is a learning allocator with three goals:
 
 1. Keep a readable ptmalloc-style implementation: chunks, boundary tags, bins, arenas, top chunk, and mmap.
 2. Add a modern small-object frontend: size classes, slabs, thread-local caches, and central refill/drain.
+3. Provide separate teaching implementations of common allocator families that can be selected at runtime.
 
 The result is a hybrid design:
 
@@ -27,6 +28,10 @@ Runtime mode:
 |---|---|
 | `MY_MALLOC_MODE=hybrid` | Use slab frontend first, then ptmalloc-style fallback. This is the default. |
 | `MY_MALLOC_MODE=ptmalloc` | Disable the slab frontend and use only the chunk/bin/arena path. |
+| `MY_MALLOC_MODE=tcmalloc_like` | Use the teaching size-class/thread-cache/central-free-list allocator. |
+| `MY_MALLOC_MODE=jemalloc_like` | Use the teaching arena/run/tcache allocator. |
+| `MY_MALLOC_MODE=mimalloc_like` | Use the teaching per-thread heap/page allocator with remote-free queues. |
+| `MY_MALLOC_MODE=adaptive` | Use a simple size-based dispatch across the teaching allocators. |
 
 ## 2. Top-level Components
 
@@ -43,6 +48,11 @@ flowchart TB
     SlabLookup["64KB slab lookup table"]
 
     Ptmalloc["ptmalloc-style fallback"]
+    Family["Teaching family allocators"]
+    TCLike["tcmalloc-like<br/>thread cache + central list"]
+    JELike["jemalloc-like<br/>arenas + runs"]
+    MILike["mimalloc-like<br/>owner pages + remote free"]
+    Adaptive["adaptive<br/>size-based selection"]
     Tcache["Thread-local tcache"]
     ArenaMgr["ArenaManager"]
     Arena["Arena"]
@@ -56,6 +66,11 @@ flowchart TB
     SlabLocal --> SlabCentral
     Slab --> SlabLookup
     API --> Ptmalloc
+    API --> Family
+    Family --> TCLike
+    Family --> JELike
+    Family --> MILike
+    Family --> Adaptive
     Ptmalloc --> Tcache
     Ptmalloc --> ArenaMgr --> Arena
     Arena --> Pipeline --> Bins
@@ -70,6 +85,7 @@ Main source files:
 | LD_PRELOAD hooks | `include/my_ptmalloc/hooks.h`, `src/hooks.cpp` |
 | Initialization | `src/init.cpp` |
 | Slab allocator | `include/my_ptmalloc/slab_allocator.h`, `src/slab_allocator.cpp` |
+| Teaching family allocators | `include/my_ptmalloc/family_allocators.h`, `src/family_allocators.cpp` |
 | Allocation pipeline | `include/my_ptmalloc/alloc_pipeline.h`, `src/alloc_pipeline.cpp`, `src/malloc_impl.cpp` |
 | Free / coalescing | `src/free_impl.cpp`, `src/consolidate.cpp`, `src/coalesce.cpp` |
 | Realloc | `src/realloc_impl.cpp` |
@@ -330,5 +346,38 @@ The default hot path avoids always-on counters because atomic telemetry can chan
 | Remote free | Slab frees return to the current thread path | Producer/consumer workloads can be worse than mimalloc/tcmalloc |
 | Size classes | Uniform 16-byte classes up to 1024B | Easier to understand, less tuned than production tables |
 | Large bins | Sorted list plus binmap, not full glibc nextsize behavior | Simpler maintenance, less optimal search/update behavior |
-| Adaptive policy | Coarse runtime modes | Good for experiments, not yet a fine-grained online selector |
+| Adaptive policy | Simple size-based runtime selector | Good baseline for experiments, not yet a learned online selector |
 | System memory | Simplified heap/span management | Less release/reuse sophistication than jemalloc/tcmalloc/mimalloc |
+
+## 11. Runtime Family Modes
+
+The teaching family modes are implemented in `src/family_allocators.cpp`. They use a separate 64KB page/span format and direct mmap-backed large allocations. They are intentionally independent from the ptmalloc chunk format so their behavior is easier to compare.
+
+```mermaid
+flowchart TB
+    Mode["MY_MALLOC_MODE"]
+    TC["tcmalloc_like<br/>size class -> thread cache -> central list -> span"]
+    JE["jemalloc_like<br/>thread tcache -> arena -> run"]
+    MI["mimalloc_like<br/>thread heap -> owned pages -> remote-free queue"]
+    AD["adaptive<br/><=256 mimalloc-like<br/><=4096 tcmalloc-like<br/>large mmap"]
+
+    Mode --> TC
+    Mode --> JE
+    Mode --> MI
+    Mode --> AD
+```
+
+Each mode implements enough of the real allocator family's core mechanism to make benchmarks meaningful:
+
+- `tcmalloc_like`: thread cache and central free-list batching.
+- `jemalloc_like`: arena assignment and run-based refill.
+- `mimalloc_like`: page ownership and remote-free transfer.
+- `adaptive`: a simple policy that routes tiny allocations to mimalloc-like pages, small allocations to tcmalloc-like spans, and large allocations to direct mmap.
+
+Detailed documents:
+
+- [ptmalloc_design.md](ptmalloc_design.md)
+- [tcmalloc_design.md](tcmalloc_design.md)
+- [jemalloc_design.md](jemalloc_design.md)
+- [mimalloc_design.md](mimalloc_design.md)
+- [adaptive_allocator.md](adaptive_allocator.md)

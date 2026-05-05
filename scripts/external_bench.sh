@@ -50,6 +50,14 @@ environment:
   JOBS              default: online CPU count
   GLIBC_SRC         optional path for run-all glibc benchtests
   MIMALLOC_TESTS    optional space-separated list for run-all/run-mimalloc-bench
+  MIMALLOC_ALLOCATORS
+                   optional allocator labels for run-mimalloc-bench.
+                   default: glibc my-hybrid my-ptmalloc.
+                   supported: glibc my-hybrid my-ptmalloc my-tcmalloc-like
+                   my-jemalloc-like my-mimalloc-like my-adaptive
+  REDIS_ALLOCATORS optional Redis modes. Default: glibc hybrid ptmalloc.
+                   supported: glibc hybrid ptmalloc tcmalloc_like
+                   jemalloc_like mimalloc_like adaptive
 
 examples:
   scripts/external_bench.sh setup-mimalloc-bench
@@ -157,6 +165,10 @@ run_mimalloc_one() {
     glibc) env_args=(SYSMALLOC=1);;
     my-hybrid) env_args=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=hybrid);;
     my-ptmalloc) env_args=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=ptmalloc);;
+    my-tcmalloc-like) env_args=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=tcmalloc_like);;
+    my-jemalloc-like) env_args=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=jemalloc_like);;
+    my-mimalloc-like) env_args=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=mimalloc_like);;
+    my-adaptive) env_args=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=adaptive);;
     *) echo "unknown allocator label: $allocator_label" | tee -a "$out"; return 0;;
   esac
 
@@ -222,9 +234,15 @@ run_mimalloc_bench() {
     if [[ "$test_name" == "cache-scratch" ]]; then
       test_name="cscratch"
     fi
-    run_mimalloc_one "$bench_dir" "glibc" "$test_name"
-    run_mimalloc_one "$bench_dir" "my-hybrid" "$test_name"
-    run_mimalloc_one "$bench_dir" "my-ptmalloc" "$test_name"
+    local allocators=()
+    if [[ -n "${MIMALLOC_ALLOCATORS:-}" ]]; then
+      read -r -a allocators <<< "$MIMALLOC_ALLOCATORS"
+    else
+      allocators=(glibc my-hybrid my-ptmalloc)
+    fi
+    for allocator in "${allocators[@]}"; do
+      run_mimalloc_one "$bench_dir" "$allocator" "$test_name"
+    done
   done
 }
 
@@ -277,6 +295,10 @@ PY
     glibc) server_env=();;
     hybrid) server_env=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=hybrid);;
     ptmalloc) server_env=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=ptmalloc);;
+    tcmalloc_like) server_env=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=tcmalloc_like);;
+    jemalloc_like) server_env=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=jemalloc_like);;
+    mimalloc_like) server_env=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=mimalloc_like);;
+    adaptive) server_env=(LD_PRELOAD="$MY_MALLOC_SO" MY_MALLOC_MODE=adaptive);;
     *) echo "unknown redis mode: $mode" | tee -a "$out"; return 0;;
   esac
 
@@ -305,9 +327,15 @@ PY
 }
 
 run_redis() {
-  run_redis_one glibc
-  run_redis_one hybrid
-  run_redis_one ptmalloc
+  local allocators=()
+  if [[ -n "${REDIS_ALLOCATORS:-}" ]]; then
+    read -r -a allocators <<< "$REDIS_ALLOCATORS"
+  else
+    allocators=(glibc hybrid ptmalloc)
+  fi
+  for allocator in "${allocators[@]}"; do
+    run_redis_one "$allocator"
+  done
 }
 
 run_real_apps() {

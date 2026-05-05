@@ -10,6 +10,10 @@ namespace my_ptmalloc {
 enum class AllocMode : uint8_t {
     Hybrid,
     PtmallocOnly,
+    TcmallocLike,
+    JemallocLike,
+    MimallocLike,
+    Adaptive,
 };
 
 enum class AllocOp : uint8_t {

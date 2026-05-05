@@ -36,6 +36,10 @@ using StrategyEntryFn = StrategyDescriptor (*)() noexcept;
 
 StrategyDescriptor hybrid_strategy_descriptor() noexcept;
 StrategyDescriptor ptmalloc_strategy_descriptor() noexcept;
+StrategyDescriptor tcmalloc_like_strategy_descriptor() noexcept;
+StrategyDescriptor jemalloc_like_strategy_descriptor() noexcept;
+StrategyDescriptor mimalloc_like_strategy_descriptor() noexcept;
+StrategyDescriptor adaptive_strategy_descriptor() noexcept;
 StrategyDescriptor libc_strategy_descriptor() noexcept;
 
 } // namespace my_ptmalloc

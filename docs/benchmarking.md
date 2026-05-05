@@ -46,6 +46,10 @@ build/libmy_ptmalloc.so
 ```bash
 ./build/bench_runner --strategy hybrid
 ./build/bench_runner --strategy ptmalloc
+./build/bench_runner --strategy tcmalloc_like
+./build/bench_runner --strategy jemalloc_like
+./build/bench_runner --strategy mimalloc_like
+./build/bench_runner --strategy adaptive
 ./build/bench_runner --strategy libc
 ./build/bench_runner --strategy plugin:./build/libcounting_malloc_strategy.so
 ```
@@ -54,6 +58,10 @@ build/libmy_ptmalloc.so
 |---|---|
 | `hybrid` | Slab frontend plus ptmalloc-style fallback |
 | `ptmalloc` | Chunk/bin/arena backend only |
+| `tcmalloc_like` | Teaching thread-cache/central-list/span allocator |
+| `jemalloc_like` | Teaching arena/run/tcache allocator |
+| `mimalloc_like` | Teaching per-thread heap/page/remote-free allocator |
+| `adaptive` | Simple size-based dispatcher over teaching modes |
 | `libc` / `glibc` | System allocator baseline |
 | `plugin:path.so` | External allocator strategy |
 
@@ -162,6 +170,13 @@ my_malloc hybrid mode through LD_PRELOAD
 my_malloc ptmalloc mode through LD_PRELOAD
 ```
 
+To include the teaching allocator-family modes, set `MIMALLOC_ALLOCATORS`:
+
+```bash
+MIMALLOC_ALLOCATORS="glibc my-hybrid my-ptmalloc my-tcmalloc-like my-jemalloc-like my-mimalloc-like my-adaptive" \
+  scripts/external_bench.sh run-mimalloc-bench rptest
+```
+
 Important environment note: if the official `mimalloc-bench` build is blocked by missing tools such as `unzip`, the script falls back to a local CMake build of core benchmarks. In that fallback, shbench binaries are stubs and must not be reported.
 
 ## 9. Redis
@@ -186,6 +201,13 @@ The script starts Redis three times:
 glibc server
 hybrid server through LD_PRELOAD
 ptmalloc server through LD_PRELOAD
+```
+
+To include the teaching modes:
+
+```bash
+REDIS_ALLOCATORS="glibc hybrid ptmalloc tcmalloc_like jemalloc_like mimalloc_like adaptive" \
+  scripts/external_bench.sh run-redis
 ```
 
 It then runs:
@@ -274,3 +296,58 @@ Interpretation:
 - The next meaningful performance work is empty slab/span reclamation, remote-free ownership, and better size-class/batch tuning.
 
 Detailed raw-result notes are in [external_benchmark_results.md](external_benchmark_results.md).
+
+## 14. Current Multi-mode Smoke Results
+
+After adding the teaching allocator-family modes, the following smoke checks were run locally:
+
+```bash
+./build/allocator_validate --strategy tcmalloc_like
+./build/allocator_validate --strategy jemalloc_like
+./build/allocator_validate --strategy mimalloc_like
+./build/allocator_validate --strategy adaptive
+LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=tcmalloc_like ./build/test_basic
+LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=jemalloc_like ./build/test_basic
+LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=mimalloc_like ./build/test_basic
+LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=adaptive ./build/test_basic
+```
+
+All passed.
+
+Small smoke benchmark sample:
+
+| Strategy | `same_size_64` ops/sec | `random` ops/sec |
+|---|---:|---:|
+| `hybrid` | 46,491,224 | 1,601,083 |
+| `ptmalloc` | 51,542,608 | 1,817,504 |
+| `tcmalloc_like` | 47,214,679 | 1,648,257 |
+| `jemalloc_like` | 47,075,882 | 1,586,139 |
+| `mimalloc_like` | 37,858,449 | 1,468,391 |
+| `adaptive` | 34,700,041 | 1,494,825 |
+| `libc` | 9,305,140 | 1,114,380 |
+
+Short cross-thread sample, 4 threads and 2000 objects per producer:
+
+| Strategy | `cross_thread_free` ops/sec |
+|---|---:|
+| `hybrid` | 1,450,530 |
+| `ptmalloc` | 1,696,853 |
+| `tcmalloc_like` | 1,663,801 |
+| `jemalloc_like` | 1,585,654 |
+| `mimalloc_like` | 1,657,117 |
+| `adaptive` | 1,543,815 |
+| `libc` | 1,635,834 |
+
+These are smoke numbers, not final claims. They confirm the modes are runnable and benchmarkable; repeated runs and external workloads are still needed before drawing strong conclusions.
+
+External `mimalloc-bench glibc-simple` was also run through LD_PRELOAD for all modes:
+
+| Allocator | Elapsed | Peak RSS KB | Status |
+|---|---:|---:|---|
+| glibc | 0:07.28 | 1,792 | pass |
+| hybrid | 0:13.18 | 3,456 | pass |
+| ptmalloc | 0:29.40 | 1,283,072 | pass |
+| tcmalloc-like | 0:07.21 | 3,328 | pass |
+| jemalloc-like | 0:08.79 | 3,584 | pass |
+| mimalloc-like | 0:09.23 | 3,456 | pass |
+| adaptive | 0:10.83 | 3,456 | pass |

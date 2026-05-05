@@ -8,6 +8,7 @@
 #include "my_ptmalloc/tcache.h"
 #include "my_ptmalloc/observer.h"
 #include "my_ptmalloc/slab_allocator.h"
+#include "my_ptmalloc/family_allocators.h"
 #include "my_ptmalloc/allocator_lab.h"
 #include "my_ptmalloc/config.h"
 #include "my_ptmalloc/types.h"
@@ -22,7 +23,22 @@ void* my_malloc(size_t size) noexcept {
     // Edge case: zero-size allocation
     if (size == 0) size = 1;
 
-    if (allocator_mode() == AllocMode::Hybrid) {
+    AllocMode mode = allocator_mode();
+    switch (mode) {
+        case AllocMode::TcmallocLike:
+            return tcmalloc_like_malloc(size);
+        case AllocMode::JemallocLike:
+            return jemalloc_like_malloc(size);
+        case AllocMode::MimallocLike:
+            return mimalloc_like_malloc(size);
+        case AllocMode::Adaptive:
+            return adaptive_malloc(size);
+        case AllocMode::Hybrid:
+        case AllocMode::PtmallocOnly:
+            break;
+    }
+
+    if (mode == AllocMode::Hybrid) {
         if (void* slab = slab_malloc(size)) {
             if (allocator_stats_enabled_fast()) stats_record_alloc(AllocPath::Slab);
             if (allocator_trace_enabled_fast()) trace_record(AllocOp::Malloc, AllocPath::Slab, size, slab);

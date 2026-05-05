@@ -8,6 +8,10 @@ The project currently exposes these strategies:
 |---|---|
 | `hybrid` | Slab frontend for small objects plus ptmalloc-style fallback. |
 | `ptmalloc` | Slab disabled; use the chunk/bin/arena allocator. |
+| `tcmalloc_like` | Teaching implementation of size classes, thread caches, central free lists, and spans. |
+| `jemalloc_like` | Teaching implementation of arenas, runs, and per-thread tcache. |
+| `mimalloc_like` | Teaching implementation of per-thread heaps, page ownership, and remote-free queues. |
+| `adaptive` | Simple size-based dispatcher across teaching allocator modes. |
 | `libc` | System malloc baseline. |
 | `plugin:path.so` | User-provided allocator strategy. |
 
@@ -253,7 +257,12 @@ Small objects are rounded to size classes. A span contains many same-size object
 
 ### 3.3 What this project implements
 
-The `hybrid` small-object frontend implements selected tcmalloc-like ideas:
+The project now has two tcmalloc-related pieces:
+
+- the `hybrid` frontend borrows selected tcmalloc-like ideas for allocations up to 1024B;
+- the `tcmalloc_like` runtime mode is a separate teaching allocator with 4096B size classes, thread caches, central free lists, and 64KB spans.
+
+The `hybrid` small-object frontend implements:
 
 | tcmalloc concept | Project implementation |
 |---|---|
@@ -320,7 +329,14 @@ Important jemalloc ideas:
 
 ### 4.2 What this project borrows
 
-This project borrows the broad idea of separating:
+The project now has a `jemalloc_like` runtime mode. It implements the teaching version of:
+
+- multiple arenas;
+- thread arena assignment;
+- arena-local size-class runs;
+- per-thread tcache refill from arena runs.
+
+The broader project also borrows the idea of separating:
 
 - small object classes;
 - arena-local state;
@@ -373,7 +389,14 @@ Key ideas:
 
 ### 5.2 What this project borrows
 
-The project borrows the lesson that ownership matters:
+The project now has a `mimalloc_like` runtime mode. It implements:
+
+- per-thread heap IDs;
+- owned pages for each size class;
+- local free lists for owner-thread reuse;
+- atomic remote-free lists when another thread frees an object owned by a different heap.
+
+The broader project borrows the lesson that ownership matters:
 
 - slab pointer lookup recovers slab metadata quickly;
 - central caches reduce isolation;
@@ -413,7 +436,15 @@ This is one of the most important future improvements for this project.
 
 ## 6. Adaptive Allocation
 
-The project has a strategy lab and runtime modes, but it is not yet a fine-grained adaptive allocator.
+The project has a real `adaptive` runtime mode, but it is intentionally simple:
+
+```text
+size <= 256      -> mimalloc_like
+size <= 4096     -> tcmalloc_like
+larger requests  -> direct mmap-backed large allocation
+```
+
+This is not yet a learned policy. It is a clear baseline for future adaptive work.
 
 Possible adaptive signals:
 
@@ -437,19 +468,18 @@ For this project, the practical next step is not full reinforcement learning. It
 
 ## 7. Feature Matrix
 
-| Feature | ptmalloc mode | hybrid mode | Full production allocators |
-|---|---:|---:|---:|
-| Boundary-tag chunks | yes | fallback only | glibc yes |
-| Tcache | yes | fallback only | glibc/jemalloc yes |
-| Fastbins | yes | fallback only | glibc yes |
-| Small/large bins | yes | fallback only | glibc yes |
-| Multiple arenas | yes | fallback only | glibc/jemalloc yes |
-| Small-object slab frontend | no | yes | tcmalloc/jemalloc/mimalloc yes |
-| Central free lists | no | simplified | tcmalloc yes |
-| Empty slab/span release | no | no | yes |
-| Owner remote-free queues | no | no | mimalloc/tcmalloc-like designs yes |
-| Extent lifecycle | no | no | jemalloc yes |
-| Strategy plugins | yes | yes | project-specific learning feature |
+| Feature | ptmalloc | hybrid | tcmalloc_like | jemalloc_like | mimalloc_like | adaptive |
+|---|---:|---:|---:|---:|---:|---:|
+| Boundary-tag chunks | yes | fallback | no | no | no | no |
+| Tcache | yes | fallback | thread cache | thread tcache | local list | mixed |
+| Fastbins/smallbins/largebins | yes | fallback | no | no | no | no |
+| Multiple arenas | yes | fallback | no | yes | no | no |
+| Size classes | no | <=1024B slab | <=4096B | <=4096B | <=4096B | yes |
+| Central free lists | no | simplified | yes | arena runs | no | tcmalloc-like |
+| Owner remote-free queues | no | no | no | no | yes | tiny objects |
+| Direct mmap large path | yes | yes | yes | yes | yes | yes |
+| Empty span/page release | partial top trim | no | no | no | no | no |
+| Strategy plugins | yes | yes | yes | yes | yes | yes |
 
 ## 8. How To Study The Project
 
