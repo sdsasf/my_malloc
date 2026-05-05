@@ -17,6 +17,8 @@ A C++17 hybrid memory allocator. It keeps a ptmalloc-style arena/bin fallback fo
 - **LD_PRELOAD hooks** -- full C-linkage `malloc`/`free`/`calloc`/`realloc`/`memalign`/`posix_memalign`/`aligned_alloc`/`mallopt`/`malloc_usable_size`
 - **Bootstrap buffer** -- static per-thread buffers for pre-init allocations before `dlsym` resolves
 - **Allocator lab controls** -- runtime backend selection with `MY_MALLOC_MODE`, opt-in stats with `MY_MALLOC_STATS=1`, and optional trace ring with `MY_MALLOC_TRACE=1`
+- **Pluggable strategy API** -- built-in `hybrid`, `ptmalloc`, and `libc` strategies plus external plugin loading through `my_malloc_get_strategy`
+- **Validation and benchmark harness** -- `allocator_validate` checks custom strategies before `bench_runner` measures them
 - **Debug gating** -- hot-path metadata checks and stderr logging are compiled out unless `MY_PTMALLOC_ENABLE_DEBUG=1` is defined
 
 ## Architecture
@@ -88,6 +90,9 @@ cmake --build build -j$(nproc)
 | `bench_my` | Comparison benchmark (my_ptmalloc) |
 | `bench_sys` | Comparison benchmark (glibc) |
 | `heap_inspect` | Heap state inspection tool |
+| `allocator_validate` | Correctness validator for built-in or plugin strategies |
+| `bench_runner` | Standardized benchmark runner for built-in or plugin strategies |
+| `example_counting_strategy` | Example plugin wrapping libc malloc with counters |
 
 ### Run Tests
 
@@ -154,6 +159,25 @@ Programmatic stats API:
 auto stats = my_ptmalloc::my_malloc_stats_snapshot();
 my_ptmalloc::my_malloc_dump_stats_json(stdout);
 my_ptmalloc::my_malloc_stats_reset();
+```
+
+### Strategy Plugins
+
+Validate and benchmark built-in strategies:
+
+```bash
+./build/allocator_validate --strategy hybrid
+./build/allocator_validate --strategy ptmalloc
+./build/bench_runner --strategy hybrid --json
+./build/bench_runner --strategy libc --json
+```
+
+Build and run the example plugin:
+
+```bash
+cmake --build build --target example_counting_strategy
+./build/allocator_validate --strategy plugin:./build/libcounting_malloc_strategy.so
+./build/bench_runner --strategy plugin:./build/libcounting_malloc_strategy.so --json
 ```
 
 ## Benchmark Results
@@ -225,7 +249,7 @@ This version implements the planned hot-path optimizations:
 - Thread-local slab caches refill in batches from central lists and drain surplus objects back to central lists.
 - Debug validation and `fprintf` calls in hot code are behind `MY_PTMALLOC_ENABLE_DEBUG`.
 
-See [docs/allocator_design.md](docs/allocator_design.md) for a detailed implementation and design explanation.
+See [docs/allocator_design.md](docs/allocator_design.md) for the allocator implementation design, and [docs/allocator_lab.md](docs/allocator_lab.md) for the learning-oriented strategy/plugin/benchmark guide.
 
 ## Project Structure
 

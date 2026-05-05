@@ -56,6 +56,25 @@ add_executable(heap_inspect tools/heap_inspect.cpp)
 target_link_libraries(heap_inspect PRIVATE my_ptmalloc_static)
 target_compile_options(heap_inspect PRIVATE -O2 -march=native)
 
+# Strategy validation and benchmark tools
+add_executable(allocator_validate tools/allocator_validate.cpp)
+target_include_directories(allocator_validate PRIVATE include tools)
+target_link_libraries(allocator_validate PRIVATE my_ptmalloc_static pthread dl)
+target_compile_options(allocator_validate PRIVATE -O2 -march=native)
+
+add_executable(bench_runner tools/bench_runner.cpp)
+target_include_directories(bench_runner PRIVATE include tools)
+target_link_libraries(bench_runner PRIVATE my_ptmalloc_static pthread dl)
+target_compile_options(bench_runner PRIVATE -O2 -march=native)
+
+# Example plugin strategy for users to copy.
+add_library(example_counting_strategy MODULE plugins/counting_malloc_strategy.cpp)
+target_include_directories(example_counting_strategy PRIVATE include)
+target_compile_options(example_counting_strategy PRIVATE -O2 -march=native -Wall -Wextra)
+set_target_properties(example_counting_strategy PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "libcounting_malloc_strategy")
+
 # Comparison benchmarks: my_ptmalloc vs system malloc
 add_executable(bench_my test/bench_compare.cpp)
 target_link_libraries(bench_my PRIVATE my_ptmalloc_static pthread)
