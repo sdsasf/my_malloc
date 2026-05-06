@@ -38,16 +38,43 @@ target_link_libraries(test_stress PRIVATE my_ptmalloc_static pthread)
 target_compile_options(test_stress PRIVATE -O2 -march=native)
 add_test(NAME stress COMMAND test_stress)
 
-add_executable(test_adaptive_control test/test_adaptive_control.cpp)
-target_link_libraries(test_adaptive_control PRIVATE my_ptmalloc_static pthread)
-target_compile_options(test_adaptive_control PRIVATE -O2 -march=native)
-foreach(profile balanced low_latency low_rss large_heavy cross_thread)
-  add_test(NAME adaptive_control_${profile}
+add_executable(test_adaptive_modes test/test_adaptive_modes.cpp)
+target_link_libraries(test_adaptive_modes PRIVATE my_ptmalloc_static pthread)
+target_compile_options(test_adaptive_modes PRIVATE -O2 -march=native)
+foreach(mode balanced throughput_cache compact_rss large_object)
+  add_test(NAME adaptive_mode_${mode}
            COMMAND ${CMAKE_COMMAND} -E env
            MY_MALLOC_MODE=adaptive
-           MY_MALLOC_ADAPTIVE_PROFILE=${profile}
-           $<TARGET_FILE:test_adaptive_control>)
+           MY_MALLOC_ADAPTIVE_MODE=${mode}
+           MY_MALLOC_ADAPTIVE_MODE_SELECTOR=fixed
+           $<TARGET_FILE:test_adaptive_modes> ${mode})
 endforeach()
+add_test(NAME adaptive_mode_hardened_debug
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_MODE=adaptive
+         MY_MALLOC_ADAPTIVE_MODE=hardened_debug
+         MY_MALLOC_ADAPTIVE_DEBUG_MODE=1
+         $<TARGET_FILE:test_adaptive_modes> hardened_debug)
+add_test(NAME adaptive_mode_soft_switch
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_MODE=adaptive
+         MY_MALLOC_ADAPTIVE_MODE=balanced
+         MY_MALLOC_ADAPTIVE_MODE_SELECTOR=manual
+         $<TARGET_FILE:test_adaptive_modes> soft_switch)
+add_test(NAME adaptive_selector_remote_free
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_MODE=adaptive
+         MY_MALLOC_ADAPTIVE_MODE=auto
+         MY_MALLOC_ADAPTIVE_MODE_WINDOW=64
+         MY_MALLOC_ADAPTIVE_MODE_COOLDOWN=0
+         $<TARGET_FILE:test_adaptive_modes> remote_selector)
+add_test(NAME adaptive_selector_large_object
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_MODE=adaptive
+         MY_MALLOC_ADAPTIVE_MODE=auto
+         MY_MALLOC_ADAPTIVE_MODE_WINDOW=32
+         MY_MALLOC_ADAPTIVE_MODE_COOLDOWN=0
+         $<TARGET_FILE:test_adaptive_modes> large_selector)
 
 add_executable(test_debug test/test_debug.cpp)
 target_link_libraries(test_debug PRIVATE my_ptmalloc_static pthread)
@@ -79,21 +106,6 @@ foreach(strategy hybrid ptmalloc tcmalloc_like jemalloc_like mimalloc_like adapt
 endforeach()
 add_test(NAME validate_demo_all COMMAND allocator_validate --strategy demo_all)
 
-add_test(NAME validate_adaptive_ucb1_static
-         COMMAND ${CMAKE_COMMAND} -E env
-         MY_MALLOC_ADAPTIVE_POLICY=ucb1
-         MY_MALLOC_ADAPTIVE_PARAM_POLICY=static
-         $<TARGET_FILE:allocator_validate> --strategy adaptive)
-add_test(NAME validate_adaptive_ucb1_heuristic
-         COMMAND ${CMAKE_COMMAND} -E env
-         MY_MALLOC_ADAPTIVE_POLICY=ucb1
-         MY_MALLOC_ADAPTIVE_PARAM_POLICY=heuristic
-         $<TARGET_FILE:allocator_validate> --strategy adaptive)
-add_test(NAME validate_adaptive_coordinate
-         COMMAND ${CMAKE_COMMAND} -E env
-         MY_MALLOC_ADAPTIVE_PARAM_POLICY=coordinate_bandit
-         $<TARGET_FILE:allocator_validate> --strategy adaptive)
-
 add_executable(bench_runner tools/bench_runner.cpp)
 target_include_directories(bench_runner PRIVATE include tools)
 target_link_libraries(bench_runner PRIVATE my_ptmalloc_static pthread dl)
@@ -121,17 +133,11 @@ add_test(NAME preload_adaptive
          LD_PRELOAD=$<TARGET_FILE:my_ptmalloc>
          MY_MALLOC_MODE=adaptive
          $<TARGET_FILE:test_basic>)
-add_test(NAME preload_adaptive_ucb1
-         COMMAND ${CMAKE_COMMAND} -E env
-         LD_PRELOAD=$<TARGET_FILE:my_ptmalloc>
-         MY_MALLOC_MODE=adaptive
-         MY_MALLOC_ADAPTIVE_POLICY=ucb1
-         $<TARGET_FILE:test_basic>)
 add_test(NAME preload_adaptive_static
          COMMAND ${CMAKE_COMMAND} -E env
          LD_PRELOAD=$<TARGET_FILE:my_ptmalloc>
          MY_MALLOC_MODE=adaptive
-         MY_MALLOC_ADAPTIVE_PARAM_POLICY=static
+         MY_MALLOC_ADAPTIVE_MODE=balanced
          $<TARGET_FILE:test_basic>)
 add_test(NAME preload_adaptive_demo
          COMMAND ${CMAKE_COMMAND} -E env

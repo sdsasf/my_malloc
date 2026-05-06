@@ -57,7 +57,7 @@ flowchart TB
 | `tcmalloc_like` | Thread caches, central free lists, 64KB spans | Study tcmalloc-style batching and size classes |
 | `jemalloc_like` | Arenas, size-class runs, per-thread tcache | Study arena/run organization |
 | `mimalloc_like` | Per-thread heaps, owned pages, remote-free queues | Study cross-thread free ownership |
-| `adaptive` | Independent adaptive backend with internal architectures and parameter tuning | Study adaptive ownership, metadata, architecture switching, and tuning boundaries |
+| `adaptive` | Independent multi-mode adaptive backend | Study adaptive ownership, allocation-time mode metadata, soft switching, and telemetry |
 | `adaptive_demo` / `demo_all` | Legacy dispatcher over teaching modes | Demonstrate cross-allocator policy selection |
 | `libc` / `glibc` | System malloc | Reference baseline |
 | `plugin:path.so` | External shared library | User-defined allocator experiments |
@@ -179,53 +179,46 @@ done
 
 ## 7. Adaptive Allocator Experiments
 
-The built-in `adaptive` strategy is the experimental allocator design in this project, not a wrapper around the teaching allocators. Its internal architectures should be designed for low-cost soft switching and stable ownership routing. Adaptive has two decision layers:
+The built-in `adaptive` strategy is the experimental allocator design in this project, not a wrapper around the teaching allocators. Its top-level abstraction is `AdaptiveMode`, and all modes share one header, ownership table, stats path, and free-routing model.
 
-- an architecture layer that switches small/medium/large internal architectures at allocation-window boundaries;
-- a parameter layer that tunes runtime config such as page/span size and batch hints at a separate window.
+Current modes:
+
+- `balanced`;
+- `throughput_cache`;
+- `deterministic_latency`;
+- `compact_rss`;
+- `fragmentation_stable`;
+- `cross_thread`;
+- `large_object`;
+- `hardened_debug`.
 
 Useful telemetry includes:
 
-- allocation count by size class;
-- free count by size class;
+- allocation/free count by mode;
 - pool hit/miss rate;
-- remote-free count;
+- remote-free ratio;
+- size entropy and large-byte ratio;
 - mapped bytes;
 - active bytes;
-- cached free bytes;
-- number of empty slabs/spans;
-- arena lock contention;
-- EWMA and p50/p99 allocation latency samples.
+- mapped/live ratio;
+- internal fragmentation estimate;
+- slow-path ratio;
+- invalid/double-free counters.
 
-The current adaptive allocator includes both simple architecture baselines and online bandit policies:
-
-- `heuristic`: size-based baseline;
-- `round_robin`: ownership stress baseline;
-- `epsilon_greedy`: classic explore/exploit bandit;
-- `ucb1`: upper-confidence-bound bandit;
-- `thompson_sampling`: Thompson-style success/failure sampling.
-
-Parameter policies are configured with `MY_MALLOC_ADAPTIVE_PARAM_POLICY`:
-
-- `static`: fixed env/default parameters;
-- `heuristic`: low-overhead runtime tuning from memory pressure and pool hit/miss rates;
-- `coordinate_bandit`: explores one parameter coordinate at a time;
-- `bayesian_offline`: fixed runtime values produced by an external/offline tuning process.
-
-Use these before moving to heavier reinforcement learning or offline models:
+The rule selector is intentionally simple:
 
 ```text
+if debug mode is forced:
+    use hardened_debug
+
+if mapped/live pressure is high:
+    use compact_rss
+
 if remote_free_ratio is high:
-    prefer an internal strategy with owner remote queues
+    use cross_thread
 
-if empty_slab_bytes is high:
-    tune the adaptive small-object release policy
-
-if size_class hit rate is high:
-    tune the adaptive local batch size
-
-if RSS grows much faster than active bytes:
-    tune the adaptive release threshold
+if large_bytes_ratio is high:
+    use large_object
 ```
 
 Machine-learning or reinforcement-learning policies can be added later, but they need stable observations and a reward function. For allocator experiments, a practical reward usually combines throughput, p99 latency, adaptation speed after phase changes, and memory overhead:
@@ -239,7 +232,7 @@ Without reliable metrics, an ML/RL policy will mostly learn benchmark noise.
 ## 8. Notes For Contributors
 
 - Keep allocator metadata easy to inspect.
-- Add one adaptive internal strategy or policy at a time.
+- Add one adaptive mode behavior or storage-helper hook at a time.
 - Benchmark against at least `hybrid`, `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, `mimalloc_like`, `adaptive`, and `libc`.
 - Do not report external benchmark results if a dependency was stubbed or skipped.
 - Document simplifications clearly. This is a learning project, so knowing what is not implemented is as important as knowing what is implemented.

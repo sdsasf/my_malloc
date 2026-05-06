@@ -1,236 +1,152 @@
-# Adaptive Allocator Backend
+# Adaptive Multi-Mode Allocator
 
-`MY_MALLOC_MODE=adaptive` selects the project's independent adaptive allocator. It is not a dispatcher over `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, or `mimalloc_like`; those are teaching allocators used for comparison.
+`MY_MALLOC_MODE=adaptive` selects the project's independent adaptive allocator. It is not a dispatcher over the teaching allocators. `adaptive_demo` / `demo_all` keep that old teaching-dispatcher demonstration role.
 
-The current adaptive backend is best described as:
+The top-level adaptive abstraction is `AdaptiveMode`. Pooled page/span storage and direct mapping are internal helper paths only.
 
-```text
-Adaptive Control State =
-  base allocation mechanism choices
-  + mechanism modes
-  + tunable parameters
-  + safety guards
-```
+## 1. Shared Runtime
 
-The allocator does not try to be innovative by simply switching among three complete architectures. `SmallObject`, `MediumObject`, and `LargeObject` are base allocation mechanisms. The adaptive controller changes how these mechanisms are preferred, configured, and constrained over time.
+All adaptive modes share one runtime:
 
-## 1. Design Goal
+- `AdaptiveHeader` before every allocation;
+- ownership page table and optional debug registry lookup;
+- page/span/region metadata;
+- mode table and soft-switch state;
+- shared stats and workload telemetry;
+- safe free routing.
 
-The adaptive allocator is designed as a learning platform for runtime allocator control:
+`AdaptiveHeader` records `mode_id` at allocation time. `malloc` uses the current active mode, while `free`, `realloc`, and `usable_size` use the header's `mode_id`. A mode switch affects future allocations only. Live objects are not migrated.
 
-- keep a stable ownership model so control changes do not break `free`;
-- use window observations instead of only global lifetime counters;
-- tune mechanism parameters without running complex models in the hot path;
-- let presets express objectives such as low latency or low RSS;
-- keep the current implementation small enough to test and inspect.
+## 2. Adaptive Modes
 
-```mermaid
-flowchart TB
-    Req["adaptive_malloc(size)"]
-    Obs["Window observation<br/>hit/miss, live/mapped, failures"]
-    Ctrl["Adaptive Control State"]
-    Safety["Safety guard<br/>cooldown + compatibility"]
-    Small["SmallObject mechanism<br/>page + size class"]
-    Medium["MediumObject mechanism<br/>span + class"]
-    Large["LargeObject mechanism<br/>direct mmap"]
-    Header["AdaptiveHeader<br/>mechanism + config_version"]
+| Mode | Best fit | Implemented in phase 1 | Cost / limitation |
+|---|---|---|---|
+| `Balanced` | Unknown or mixed workloads | Conservative small/medium/large helper routing and default empty-page retention | Not specialized |
+| `ThroughputCache` | Local malloc/free, server/RPC style churn | Keeps more empty pages/spans and uses cache-heavy helper routing | Higher RSS; real TLS cache is still future work |
+| `DeterministicLatency` | Low p99 jitter workloads | Avoids aggressive pooled release and keeps stable pooled reuse | More retained memory |
+| `CompactRSS` | Memory-constrained or peak-then-free workloads | Aggressively releases empty pages/spans | More mmap/refill activity |
+| `FragmentationStable` | Long mixed-size services | Tracks entropy, usable/requested, mapped/live and uses conservative pooled reuse | Size-class policy is still prototype |
+| `CrossThreadMessage` | Producer/consumer and remote-free workloads | Records owner thread and remote-free telemetry; reserves remote-free hooks | Remote-free queue is not implemented yet |
+| `LargeObjectStreaming` | Large buffer bursts | Biases allocations above 4 KiB to direct mmap and returns them quickly | Can overuse mmap for medium objects |
+| `HardenedDebug` | Tests, diagnostics, teaching allocator bugs | Direct-mmap bias, stronger header checks, invalid/double-free counters, poison-on-free | Quarantine/redzone/canary are TODO |
 
-    Req --> Obs
-    Obs --> Ctrl
-    Ctrl --> Safety
-    Safety --> Small
-    Safety --> Medium
-    Safety --> Large
-    Small --> Header
-    Medium --> Header
-    Large --> Header
-```
+The mode table defines each mode's name, objective, storage-helper selector, free/realloc/usable handlers, and optional activation/retire hooks.
 
-## 2. Base Allocation Mechanisms
+## 3. Soft Switching
 
-The adaptive allocator currently has three base allocation mechanisms:
+Soft switching invariants:
 
-| Mechanism | Default size range | Current implementation |
-|---|---:|---|
-| `SmallObject` | `size <= 1024` | 16B size classes backed by adaptive pages |
-| `MediumObject` | `1025 .. 64 KiB` | 1KiB classes backed by adaptive spans |
-| `LargeObject` | `> 64 KiB` | direct mmap with adaptive header |
+- `adaptive_malloc` reads the active mode.
+- Allocation metadata stores `mode_id`.
+- `adaptive_free`, `adaptive_realloc`, and `adaptive_usable_size` dispatch through the allocation-time mode table entry.
+- Old modes enter a retired/draining state and stop receiving new allocations.
+- Retired modes still own live objects allocated under that mode.
 
-These are not complete allocator architectures. They are reusable paths controlled by the adaptive runtime state.
+Phase 1 implements active/previous/retired state and per-mode live/free stats. It does not yet reclaim all possible mode-local future state because most storage is still in shared helper pools.
 
-Current code still uses the historical type name `AdaptiveStrategyId` and JSON field `architecture_switches` for compatibility. In the design model, those values mean base mechanism ids and mechanism switches.
+## 4. Workload Feature Extraction
 
-## 3. Ownership And Soft Switching
+The selector uses coarse, real counters. Missing advanced metrics are kept as zero or TODO rather than invented.
 
-Every adaptive allocation has an `AdaptiveHeader`. The header records:
+Tracked now:
 
-- magic number;
-- base mechanism id;
-- runtime `config_version`;
-- requested and usable size;
-- mmap region base and mapped size;
-- page/span owner pointer for pooled allocations;
-- debug ownership registry links.
+- size profile: histogram, entropy, large-bytes ratio;
+- lifetime profile: alloc/free/realloc counts, live bytes;
+- thread profile: owner thread token, same-thread free count, remote-free count, remote-free ratio;
+- reuse/cache profile: pool hit/miss and reuse rate;
+- memory profile: requested bytes, usable bytes, mapped bytes, mapped/live ratio, internal fragmentation estimate, empty/released pages/spans;
+- latency profile: slow-path estimate from mmap plus pool misses;
+- safety profile: invalid free, double free, header corruption counters.
 
-`adaptive_free(ptr)` uses allocation-time metadata. It never asks the current controller where the pointer should go. This keeps soft switching safe: new allocations use the current control state, while old allocations free through the mechanism and page/span metadata they were created with.
+Future work can add sampled p95/p99 latency, free burstiness, survival rate, per-thread imbalance, external fragmentation, quarantine hits, and maintenance-task counts.
 
-The hot ownership path uses a page-level adaptive ownership table before reading the header. The intrusive registry remains a debug fallback when `MY_MALLOC_ADAPTIVE_DEBUG_REGISTRY=1`.
+## 5. Mode Selection
 
-## 4. Adaptive Control State
+`MY_MALLOC_ADAPTIVE_MODE_SELECTOR=rule` enables the phase-1 rule baseline:
 
-The runtime control state is represented in code by `AdaptiveControlStateSnapshot` and the internal atomic config fields.
+1. Debug flag forces `HardenedDebug`.
+2. Severe mapped/live pressure selects `CompactRSS`.
+3. High remote-free ratio selects `CrossThreadMessage`.
+4. High large-bytes ratio selects `LargeObjectStreaming`.
+5. High slow-path ratio selects `DeterministicLatency`.
+6. High size entropy plus fragmentation selects `FragmentationStable`.
+7. High local reuse selects `ThroughputCache`.
+8. Otherwise use `Balanced`.
 
-| Control state field | Meaning |
+Safety guards:
+
+- `MY_MALLOC_ADAPTIVE_MODE_WINDOW` controls observation cadence.
+- `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` prevents window-to-window thrashing.
+- Hysteresis is represented by expected-gain thresholds.
+- Severe memory pressure can force `CompactRSS`.
+- `MY_MALLOC_ADAPTIVE_DEBUG_MODE=1` forces `HardenedDebug`.
+
+`MY_MALLOC_ADAPTIVE_MODE_SELECTOR=fixed` keeps the configured mode. `manual` lets code call `adaptive_set_mode()` for tests and controlled experiments.
+
+## 6. Configuration
+
+Primary mode configuration:
+
+| Env var | Values |
 |---|---|
-| `control_preset` | Current preset/objective: `balanced`, `low_latency`, `low_rss`, `large_heavy`, or `cross_thread`. |
-| `mechanism_policy` | Compatibility policy that currently chooses or biases a base mechanism. |
-| `parameter_policy` | Parameter tuner: `static`, `heuristic`, `coordinate_bandit`, or `bayesian_offline`. |
-| `small_page_size` | Page size used when the SmallObject mechanism creates new pages. |
-| `medium_span_size` | Span size used when the MediumObject mechanism creates new spans. |
-| `empty_cache_limit` | EmptyReleaseMechanism keep limit before releasing empty pages/spans. |
-| `local_batch_size` | Reserved cache/batch mechanism hint. It is not a full thread-local cache yet. |
-| `cooldown_windows` | Safety guard after mechanism preference changes. |
-| `large_path_preferred` | Whether the preset biases suitable requests toward direct mmap. |
-| `remote_free_reserved` | Reserved flag for future remote-free/owner-aware mechanisms. |
+| `MY_MALLOC_ADAPTIVE_MODE` | `balanced`, `throughput_cache`, `deterministic_latency`, `compact_rss`, `fragmentation_stable`, `cross_thread`, `large_object`, `hardened_debug`, `auto` |
+| `MY_MALLOC_ADAPTIVE_MODE_SELECTOR` | `rule`, `fixed`, `manual` |
+| `MY_MALLOC_ADAPTIVE_MODE_WINDOW` | Selector window size |
+| `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` | Cooldown in windows |
+| `MY_MALLOC_ADAPTIVE_DEBUG_MODE` | `0` / `1` |
 
-Environment variables remain compatible and now jointly initialize or influence this control state:
+## 7. Stats And Benchmark JSON
 
-| Env var | Meaning |
-|---|---|
-| `MY_MALLOC_ADAPTIVE_POLICY` | Compatibility mechanism policy. |
-| `MY_MALLOC_ADAPTIVE_PARAM_POLICY` | Parameter tuning policy. |
-| `MY_MALLOC_ADAPTIVE_PROFILE` | Initial control preset/objective. |
-| `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` | SmallObject page size. |
-| `MY_MALLOC_ADAPTIVE_MEDIUM_SPAN_SIZE` | MediumObject span size. |
-| `MY_MALLOC_ADAPTIVE_EMPTY_CACHE_LIMIT` | EmptyReleaseMechanism keep limit. |
-| `MY_MALLOC_ADAPTIVE_LOCAL_BATCH` | Future cache/batch mechanism hint. |
-| `MY_MALLOC_ADAPTIVE_ARCH_WINDOW` | Legacy name for mechanism-control window. |
-| `MY_MALLOC_ADAPTIVE_PARAM_WINDOW` | Parameter tuning window. |
-| `MY_MALLOC_ADAPTIVE_COOLDOWN_WINDOWS` | Safety cooldown after mechanism preference changes. |
+`AdaptiveStatsSnapshot` and `bench_runner --json` now expose mode-first fields:
 
-## 5. Mechanism Control
+- `current_mode`, `active_mode`, `previous_mode`;
+- `mode_switches`, `retired_mode_count`;
+- `mode_alloc_count`, `mode_free_count`;
+- `mode_live_bytes`, `mode_mapped_bytes`;
+- `remote_free_ratio`, `size_entropy`, `large_bytes_ratio`;
+- `mapped_live_ratio`, `fragmentation_estimate`, `slow_path_ratio`;
+- `double_free_count`, `invalid_free_count`.
 
-The existing policy names are kept:
+## 8. Benchmark Scenarios
 
-| Policy | Current role |
-|---|---|
-| `heuristic` | Size-based base mechanism selection. |
-| `fixed:small` | Prefer SmallObject with safe fallback. |
-| `fixed:medium` | Prefer MediumObject with safe fallback. |
-| `fixed:large` | Prefer LargeObject/direct mmap. |
-| `round_robin` | Stress-test ownership by cycling base mechanisms. |
-| `epsilon_greedy` | Explore/exploit among size-compatible base mechanisms. |
-| `ucb1` | UCB-style base mechanism preference. |
-| `thompson_sampling` | Thompson-style base mechanism preference. |
+Useful scenarios for mode work:
 
-These policies are not the full adaptive control plane. They currently choose or bias the base allocation mechanism. Future controllers should also control cache, release, remote-free, size-class, and mmap-threshold mechanisms.
+- `throughput_server`: many short-lived local allocations; should favor `ThroughputCache`.
+- `realtime_latency`: stable repeated allocation pattern; should favor `DeterministicLatency`.
+- `memory_constrained`: peak then free; should favor `CompactRSS`.
+- `producer_consumer`: one thread allocates and another frees; telemetry should select `CrossThreadMessage`.
+- `large_streaming`: large-object bursts; should favor `LargeObjectStreaming`.
+- `debug_safety`: invalid/double free checks; should favor `HardenedDebug`.
 
-## 6. Parameter Tuning
+Phase 1 proves routing, telemetry, and obvious policy differences. It does not claim every mode is already performance-dominant.
 
-`MY_MALLOC_ADAPTIVE_PARAM_POLICY` controls parameter updates:
+## 9. Limitations
 
-| Parameter policy | Current behavior |
-|---|---|
-| `static` | Read env/default control state once and keep it fixed. |
-| `heuristic` | Use window hit/miss and mapped/live pressure to adjust page/span size, empty release, batch hint, and preset. |
-| `coordinate_bandit` | Explore one parameter coordinate at a time. |
-| `bayesian_offline` | Runtime stays fixed and consumes externally tuned env/config values. |
+Complete enough in phase 1:
 
-Bayesian optimization is still treated as offline or slow-online tuning. It is not run inside the malloc hot path.
+- mode id in allocation metadata;
+- mode table dispatch for malloc/free/realloc/usable_size;
+- soft-switch state;
+- per-mode stats;
+- owner-thread remote-free telemetry;
+- rule selector with cooldown and gain guards;
+- aggressive release behavior for `CompactRSS`;
+- direct-mmap bias for `LargeObjectStreaming` and `HardenedDebug`.
 
-## 7. Control Presets
+Prototype/TODO:
 
-Profiles are now control presets/objectives, not complete architectures:
+- real thread-local cache and batch refill/drain;
+- remote-free queue and owner-aware reclaim;
+- fragmentation-stable size-class table policy;
+- sampled p95/p99 latency;
+- hardened quarantine, redzones, canaries, and richer diagnostics.
 
-| Preset | Objective |
-|---|---|
-| `balanced` | Default conservative control state. |
-| `low_latency` | Prefer cache/reuse, keep more empty pages/spans, raise batch hint. |
-| `low_rss` | Prefer aggressive empty release and lower mapped/live pressure. |
-| `large_heavy` | Bias suitable requests toward the LargeObject/direct mmap mechanism. |
-| `cross_thread` | Reserved objective for future remote-free and owner-aware reclaim. |
-
-Current preset effects are intentionally small: release keep limit, local batch hint, large-path preference, and reserved remote-free state. They do not represent separate allocator implementations.
-
-## 8. Mechanisms
-
-Implemented mechanism controls:
-
-- **PathPreferenceMechanism**: chooses or biases SmallObject, MediumObject, or LargeObject for new allocations.
-- **EmptyReleaseMechanism**: releases empty pages/spans when the per-class empty cache exceeds the active keep limit.
-- **PageSpanSizingMechanism**: changes future small page and medium span sizes through the versioned config.
-- **BatchHintMechanism**: stores `local_batch_size` as a reserved central refill/TLS cache hint.
-
-Future mechanism hooks should grow in these directions:
-
-- thread-local cache mechanism;
-- central batch refill/drain mechanism;
-- remote-free queue mechanism;
-- owner-aware reclaim mechanism;
-- dynamic mmap threshold mechanism;
-- size-class table policy;
-- decay/purge policy.
-
-## 9. Observation And Safety
-
-The hot path records relaxed counters and reads an atomic control-state snapshot. Full updates happen at window boundaries or slow paths.
-
-Window observations include:
-
-- alloc/free/realloc counts;
-- per-mechanism allocation counts;
-- pool hit/miss deltas;
-- mapped/live pressure;
-- mechanism switches;
-- parameter decisions;
-- allocation failures.
-
-Safety guards include:
-
-- size compatibility checks;
-- cooldown windows after preference changes;
-- allocation-time metadata for free routing;
-- debug registry fallback for ownership validation.
-
-## 10. Stats And Benchmark Output
-
-Benchmark JSON keeps old fields and adds mechanism/control fields. `architecture_switches` remains for compatibility; `mechanism_switches` is the preferred term.
-
-Adaptive JSON includes:
-
-- `architecture_switches` and `mechanism_switches`;
-- `parameter_decisions`;
-- `config_version` and `control_version`;
-- `profile` and `control_preset`;
-- `release_policy`;
-- `large_path_preferred`;
-- `remote_free_reserved`;
-- mapped/live bytes and ratio;
-- per-mechanism alloc/free counts;
-- pool hits/misses;
-- empty/released page/span stats.
-
-## 11. Simplifications
-
-Current limitations are explicit:
-
-- base mechanisms are still only small page, medium span, and large mmap;
-- mechanism control currently covers release, path preference, page/span size, and batch hint;
-- thread-local cache is not fully implemented;
-- remote-free queue is not implemented;
-- `cross_thread` is a reserved objective, not a working remote-free mechanism;
-- profile/preset is not a complete architecture;
-- policy algorithms still mostly choose a base mechanism;
-- `AdaptiveStrategyId`, `architecture_switches`, and `MY_MALLOC_ADAPTIVE_ARCH_WINDOW` remain as compatibility names.
-
-## 12. Commands
+## 10. Commands
 
 ```bash
 ./build/allocator_validate --strategy adaptive
-MY_MALLOC_ADAPTIVE_PROFILE=low_rss ./build/test_adaptive_control
-MY_MALLOC_ADAPTIVE_PROFILE=low_latency ./build/test_adaptive_control
-MY_MALLOC_ADAPTIVE_PROFILE=large_heavy ./build/test_adaptive_control
-MY_MALLOC_ADAPTIVE_PROFILE=cross_thread ./build/test_adaptive_control
-MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=heuristic ./build/bench_runner --strategy adaptive --bench phase_changing --json
+MY_MALLOC_ADAPTIVE_MODE=compact_rss ./build/allocator_validate --strategy adaptive
+MY_MALLOC_ADAPTIVE_MODE=auto MY_MALLOC_ADAPTIVE_MODE_WINDOW=64 ./build/bench_runner --strategy adaptive --bench cross_thread_free --json
+MY_MALLOC_ADAPTIVE_MODE=large_object ./build/bench_runner --strategy adaptive --bench phase_changing --json
 LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=adaptive ./build/test_basic
 ```

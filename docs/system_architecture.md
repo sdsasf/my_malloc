@@ -5,7 +5,7 @@ This document is the top-level architecture map for `my_malloc`. The project has
 1. An allocator lab that reproduces the core ideas of classic industrial allocators for learning.
 2. An independent `adaptive` allocator that is the project's experimental design.
 
-The industrial-style allocators are not meant to be full production clones. They are simplified implementations that preserve the important mechanisms, data structures, and tradeoffs so they can be studied, visualized, validated, and benchmarked in one codebase. The `adaptive` allocator is different: it owns its own metadata, telemetry, base allocation mechanisms, runtime control state, and parameter policy, and is intended for runtime adaptation experiments.
+The industrial-style allocators are not meant to be full production clones. They are simplified implementations that preserve the important mechanisms, data structures, and tradeoffs so they can be studied, visualized, validated, and benchmarked in one codebase. The `adaptive` allocator is different: it owns its own metadata, telemetry, mode table, allocation-time mode ids, and rule selector.
 
 ## 1. Project Pillars
 
@@ -29,10 +29,9 @@ flowchart TB
     Lab --> JE["jemalloc_like"]
     Lab --> MI["mimalloc_like"]
 
-    Adaptive --> CS["Adaptive Control State<br/>mechanisms + params + safety"]
-    CS --> AS["SmallObject mechanism"]
-    CS --> AM["MediumObject mechanism"]
-    CS --> AL["LargeObject mechanism"]
+    Adaptive --> Runtime["Shared runtime<br/>header + ownership + stats"]
+    Runtime --> Modes["AdaptiveMode table"]
+    Modes --> Helpers["Internal storage helpers<br/>pooled pages/spans + direct mmap"]
 ```
 
 The allocator lab and the adaptive allocator are comparable through the same strategy API and benchmark tools, but they are not the same layer. `adaptive` does not default to calling the teaching allocators as backends.
@@ -48,7 +47,7 @@ Runtime modes are selected with `MY_MALLOC_MODE`:
 | `tcmalloc_like` | Teaching allocator | Size classes, thread caches, central free lists, and spans. |
 | `jemalloc_like` | Teaching allocator | Arenas, runs, size classes, and per-thread tcache. |
 | `mimalloc_like` | Teaching allocator | Per-thread heaps, page ownership, and remote-free queues. |
-| `adaptive` | Experimental allocator | Independent adaptive backend with adaptive-internal policy and strategies. |
+| `adaptive` | Experimental allocator | Independent multi-mode adaptive backend with shared metadata and soft switching. |
 | `adaptive_demo` | Teaching demo | Legacy cross-teaching-allocator dispatcher, kept for demonstrations and mixed-ownership stress tests. |
 
 Tool strategies use the same names:
@@ -122,8 +121,8 @@ Every allocator family must be able to identify its own pointers on `free`, `rea
 
 | Pointer owner | Identification method | Free/realloc handler |
 |---|---|---|
-| Adaptive pooled small/medium object | Page ownership filter, `AdaptiveHeader`, and `owner_page` pointer | Return to adaptive page/span free list, with conservative empty release |
-| Adaptive large/aligned object | Page ownership filter, `AdaptiveHeader`, and mmap metadata | Adaptive direct `munmap` path |
+| Adaptive pooled object | Page ownership filter, `AdaptiveHeader`, allocation-time `mode_id`, and `owner_page` pointer | Route through the allocation-time adaptive mode and return to the shared page/span free list |
+| Adaptive direct-mapped/aligned object | Page ownership filter, `AdaptiveHeader`, allocation-time `mode_id`, and mmap metadata | Route through the allocation-time adaptive mode and `munmap` when appropriate |
 | Teaching family page object | 64KB page table in `family_allocators.cpp` | tcmalloc/jemalloc/mimalloc-like handler |
 | Teaching family large block | large-pointer table in `family_allocators.cpp` | Family large free/realloc handler |
 | Hybrid slab object | 64KB slab lookup in `slab_allocator.cpp` | Slab free/realloc path |
@@ -159,55 +158,32 @@ Each detailed document should describe:
 ```mermaid
 flowchart TB
     Req["adaptive_malloc(size)"]
-    Control["Adaptive Control State<br/>path preference + release + params"]
-    ParamPolicy["Parameter tuning<br/>static/heuristic/coordinate/offline BO"]
-    Config["RuntimeConfig<br/>versioned control parameters"]
-    Small["SmallObject mechanism<br/>16B classes"]
-    Medium["MediumObject mechanism<br/>1KiB classes"]
-    Large["LargeObject mechanism<br/>direct mmap"]
-    Header["AdaptiveHeader<br/>mechanism + config_version + page/span"]
+    Active["active AdaptiveMode"]
+    Selector["rule selector<br/>window + cooldown"]
+    Modes["mode table<br/>allocate/free/realloc/usable"]
+    Helpers["storage helpers<br/>pooled pages/spans + direct mmap"]
+    Header["AdaptiveHeader<br/>mode_id + owner thread + region"]
     Registry["page ownership filter<br/>debug registry fallback"]
     User["user pointer"]
 
-    Req --> Control
-    Req --> ParamPolicy --> Config
-    Control --> Small
-    Control --> Medium
-    Control --> Large
-    Config --> Small
-    Config --> Medium
-    Small --> Header
-    Medium --> Header
-    Large --> Header
+    Req --> Active
+    Req --> Selector --> Active
+    Active --> Modes
+    Modes --> Helpers
+    Helpers --> Header
     Header --> Registry
     Header --> User
 ```
 
 Adaptive design rules:
 
-- metadata and ownership are shared across adaptive base mechanisms;
-- SmallObject/MediumObject/LargeObject are base allocation paths, not complete architectures;
-- mechanism control chooses or biases mechanisms and updates related parameters;
-- parameter policy updates a versioned runtime config;
+- metadata, ownership, stats, and free routing are shared across adaptive modes;
+- `AdaptiveMode` is the top-level abstraction;
+- internal pooled/direct-mmap helpers are implementation details;
 - already allocated objects free through allocation-time metadata;
 - adaptive-owned pointers are never handed to ptmalloc, slab, or teaching-family free paths.
 
-Current compatibility mechanism policies:
-
-| Policy | Meaning |
-|---|---|
-| `heuristic` | Select small/medium/large by request size. |
-| `fixed:small` | Prefer small; safely fall back to medium/large when size does not fit. |
-| `fixed:medium` | Prefer medium; safely fall back to large when size does not fit. |
-| `fixed:large` | Prefer the direct mmap large mechanism. |
-| `round_robin` | Cycle adaptive strategies to stress ownership routing. |
-| `epsilon_greedy` | Windowed bandit baseline that mostly exploits the best telemetry score and sometimes explores. |
-| `ucb1` | Windowed Upper Confidence Bound bandit that gives under-tested strategies an exploration bonus. |
-| `thompson_sampling` | Windowed Thompson-style bandit that samples from success/failure uncertainty. |
-
-Current parameter policies are `static`, `heuristic`, `coordinate_bandit`, and `bayesian_offline`. Runtime knobs include small page size, medium span size, mechanism-control window, parameter window, empty release keep limit, and a local-batch hint. `bayesian_offline` means the allocator consumes values produced by an external/offline tuning run; it does not run a Bayesian optimizer inside the malloc hot path.
-
-Adaptive policy uses adaptive-specific telemetry, not teaching allocator metrics. Current online signals include base-mechanism success/failure counts, EWMA allocation latency, pool hit/miss counts, mechanism switches, parameter decisions, live bytes, and mapped bytes. Future work should add more adaptive-internal mechanisms such as TLS caches, remote-free queues, owner-aware reclaim, dynamic mmap thresholds, size-class table control, and decay/purge policy.
+Current modes are `balanced`, `throughput_cache`, `deterministic_latency`, `compact_rss`, `fragmentation_stable`, `cross_thread`, `large_object`, and `hardened_debug`. The rule selector uses adaptive-specific telemetry such as size entropy, large-byte ratio, mapped/live ratio, remote-free ratio, reuse rate, slow-path ratio, and safety counters.
 
 Detailed design: [adaptive_allocator.md](adaptive_allocator.md).
 
@@ -267,6 +243,6 @@ This avoids freeing libc-owned startup allocations through project-owned allocat
 | [tcmalloc_design.md](tcmalloc_design.md) | tcmalloc-like size classes, thread cache, central cache, spans, and simplifications. |
 | [jemalloc_design.md](jemalloc_design.md) | jemalloc-like arenas, runs, tcache, extent concepts, and simplifications. |
 | [mimalloc_design.md](mimalloc_design.md) | mimalloc-like heap ownership, pages, remote frees, and simplifications. |
-| [adaptive_allocator.md](adaptive_allocator.md) | Independent adaptive backend, base mechanisms, control state, telemetry, and future mechanism-control hooks. |
+| [adaptive_allocator.md](adaptive_allocator.md) | Independent adaptive backend, shared runtime, AdaptiveMode table, telemetry, and soft switching. |
 
 If an allocator implementation changes, update both this system map and the allocator-specific design document.

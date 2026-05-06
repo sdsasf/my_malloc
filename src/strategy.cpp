@@ -180,7 +180,7 @@ StrategyDescriptor adaptive_strategy_descriptor() noexcept {
     return StrategyDescriptor{
         STRATEGY_API_VERSION,
         "adaptive",
-        "Independent adaptive allocator with internal architecture and parameter policies",
+        "Independent multi-mode adaptive allocator with shared metadata and soft switching",
         StrategyVTable{
             adaptive_init,
             noop_shutdown,

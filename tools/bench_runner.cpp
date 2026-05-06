@@ -264,6 +264,32 @@ static BenchResult phase_changing_workload(const StrategyDescriptor& s,
     return {"phase_changing", end - start, static_cast<size_t>(iters * 2 + slots), peak_rss_kb()};
 }
 
+static BenchResult large_streaming_workload(const StrategyDescriptor& s, int iters) {
+    double start = now_ms();
+    for (int i = 0; i < iters; ++i) {
+        size_t size = 128 * 1024 + static_cast<size_t>(i % 16) * 64 * 1024;
+        void* p = s.vtable.allocate(size);
+        touch_bytes(p, size, 0x42);
+        s.vtable.deallocate(p);
+    }
+    double end = now_ms();
+    return {"large_streaming", end - start, static_cast<size_t>(iters), peak_rss_kb()};
+}
+
+static BenchResult debug_safety_workload(const StrategyDescriptor& s, int iters, bool exercise_invalid_free) {
+    double start = now_ms();
+    for (int i = 0; i < iters; ++i) {
+        void* p = s.vtable.allocate(64 + static_cast<size_t>(i % 8) * 16);
+        touch_bytes(p, 64, 0xD5);
+        s.vtable.deallocate(p);
+        if (exercise_invalid_free && i % 64 == 0) {
+            s.vtable.deallocate(p);
+        }
+    }
+    double end = now_ms();
+    return {"debug_safety", end - start, static_cast<size_t>(iters), peak_rss_kb()};
+}
+
 static RepeatSummary summarize(const std::vector<double>& values) {
     std::vector<double> sorted = values;
     std::sort(sorted.begin(), sorted.end());
@@ -297,47 +323,86 @@ static void print_json(const char* strategy, const BenchResult& r) {
                 strategy, r.name.c_str(), ops, r.ms, r.peak_rss_kb);
     if (strategy_is_adaptive(strategy)) {
         my_ptmalloc::AdaptiveStatsSnapshot s = my_ptmalloc::adaptive_stats_snapshot();
-        my_ptmalloc::AdaptiveConfigSnapshot c = my_ptmalloc::adaptive_config_snapshot();
-        my_ptmalloc::AdaptiveControlStateSnapshot control = my_ptmalloc::adaptive_control_state_snapshot();
-        std::printf(",\"adaptive\":{\"architecture_switches\":%llu,\"parameter_decisions\":%llu,"
-                    "\"mechanism_switches\":%llu,\"config_version\":%u,\"control_version\":%u,"
-                    "\"profile\":\"%s\",\"control_preset\":\"%s\",\"release_policy\":\"%s\","
-                    "\"large_path_preferred\":%s,\"remote_free_reserved\":%s,\"mapped_bytes\":%lld,"
+        std::printf(",\"adaptive\":{\"current_mode\":\"%s\",\"active_mode\":\"%s\","
+                    "\"previous_mode\":\"%s\",\"mode_switches\":%llu,"
+                    "\"retired_mode_count\":%llu,\"mapped_bytes\":%lld,"
                     "\"live_bytes\":%lld,\"mapped_live_ratio\":%.3f,"
+                    "\"remote_free_ratio\":%.3f,\"size_entropy\":%.3f,"
+                    "\"large_bytes_ratio\":%.3f,\"fragmentation_estimate\":%.3f,"
+                    "\"slow_path_ratio\":%.3f,\"double_free_count\":%llu,"
+                    "\"invalid_free_count\":%llu,"
                     "\"empty_pages\":%llu,\"empty_spans\":%llu,\"released_pages\":%llu,"
                     "\"released_spans\":%llu,\"release_unmapped_bytes\":%llu,"
-                    "\"strategy_allocs\":[%llu,%llu,%llu],\"strategy_frees\":[%llu,%llu,%llu],"
+                    "\"mode_alloc_count\":[%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu],"
+                    "\"mode_free_count\":[%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu],"
+                    "\"mode_live_bytes\":[%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld],"
+                    "\"mode_mapped_bytes\":[%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld],"
+                    "\"storage_allocs\":[%llu,%llu,%llu],\"storage_frees\":[%llu,%llu,%llu],"
                     "\"pool_hits\":[%llu,%llu,%llu],\"pool_misses\":[%llu,%llu,%llu]}",
-                    static_cast<unsigned long long>(s.architecture_switches),
-                    static_cast<unsigned long long>(s.parameter_decisions),
-                    static_cast<unsigned long long>(s.mechanism_switches),
-                    c.version,
-                    control.version,
-                    my_ptmalloc::adaptive_profile_name(c.profile),
-                    my_ptmalloc::adaptive_profile_name(control.control_preset),
-                    control.empty_release_enabled ? "enabled" : "disabled",
-                    control.large_path_preferred ? "true" : "false",
-                    control.remote_free_reserved ? "true" : "false",
+                    my_ptmalloc::adaptive_mode_name(s.current_mode),
+                    my_ptmalloc::adaptive_mode_name(s.active_mode),
+                    my_ptmalloc::adaptive_mode_name(s.previous_mode),
+                    static_cast<unsigned long long>(s.mode_switches),
+                    static_cast<unsigned long long>(s.retired_mode_count),
                     static_cast<long long>(s.mapped_bytes),
                     static_cast<long long>(s.live_bytes),
                     s.mapped_live_ratio,
+                    s.remote_free_ratio,
+                    s.size_entropy,
+                    s.large_bytes_ratio,
+                    s.fragmentation_estimate,
+                    s.slow_path_ratio,
+                    static_cast<unsigned long long>(s.double_free_count),
+                    static_cast<unsigned long long>(s.invalid_free_count),
                     static_cast<unsigned long long>(s.empty_pages),
                     static_cast<unsigned long long>(s.empty_spans),
                     static_cast<unsigned long long>(s.released_pages),
                     static_cast<unsigned long long>(s.released_spans),
                     static_cast<unsigned long long>(s.release_unmapped_bytes),
-                    static_cast<unsigned long long>(s.strategy[0].alloc_count),
-                    static_cast<unsigned long long>(s.strategy[1].alloc_count),
-                    static_cast<unsigned long long>(s.strategy[2].alloc_count),
-                    static_cast<unsigned long long>(s.strategy[0].free_count),
-                    static_cast<unsigned long long>(s.strategy[1].free_count),
-                    static_cast<unsigned long long>(s.strategy[2].free_count),
-                    static_cast<unsigned long long>(s.strategy[0].pool_hits),
-                    static_cast<unsigned long long>(s.strategy[1].pool_hits),
-                    static_cast<unsigned long long>(s.strategy[2].pool_hits),
-                    static_cast<unsigned long long>(s.strategy[0].pool_misses),
-                    static_cast<unsigned long long>(s.strategy[1].pool_misses),
-                    static_cast<unsigned long long>(s.strategy[2].pool_misses));
+                    static_cast<unsigned long long>(s.mode_alloc_count[0]),
+                    static_cast<unsigned long long>(s.mode_alloc_count[1]),
+                    static_cast<unsigned long long>(s.mode_alloc_count[2]),
+                    static_cast<unsigned long long>(s.mode_alloc_count[3]),
+                    static_cast<unsigned long long>(s.mode_alloc_count[4]),
+                    static_cast<unsigned long long>(s.mode_alloc_count[5]),
+                    static_cast<unsigned long long>(s.mode_alloc_count[6]),
+                    static_cast<unsigned long long>(s.mode_alloc_count[7]),
+                    static_cast<unsigned long long>(s.mode_free_count[0]),
+                    static_cast<unsigned long long>(s.mode_free_count[1]),
+                    static_cast<unsigned long long>(s.mode_free_count[2]),
+                    static_cast<unsigned long long>(s.mode_free_count[3]),
+                    static_cast<unsigned long long>(s.mode_free_count[4]),
+                    static_cast<unsigned long long>(s.mode_free_count[5]),
+                    static_cast<unsigned long long>(s.mode_free_count[6]),
+                    static_cast<unsigned long long>(s.mode_free_count[7]),
+                    static_cast<long long>(s.mode_live_bytes[0]),
+                    static_cast<long long>(s.mode_live_bytes[1]),
+                    static_cast<long long>(s.mode_live_bytes[2]),
+                    static_cast<long long>(s.mode_live_bytes[3]),
+                    static_cast<long long>(s.mode_live_bytes[4]),
+                    static_cast<long long>(s.mode_live_bytes[5]),
+                    static_cast<long long>(s.mode_live_bytes[6]),
+                    static_cast<long long>(s.mode_live_bytes[7]),
+                    static_cast<long long>(s.mode_mapped_bytes[0]),
+                    static_cast<long long>(s.mode_mapped_bytes[1]),
+                    static_cast<long long>(s.mode_mapped_bytes[2]),
+                    static_cast<long long>(s.mode_mapped_bytes[3]),
+                    static_cast<long long>(s.mode_mapped_bytes[4]),
+                    static_cast<long long>(s.mode_mapped_bytes[5]),
+                    static_cast<long long>(s.mode_mapped_bytes[6]),
+                    static_cast<long long>(s.mode_mapped_bytes[7]),
+                    static_cast<unsigned long long>(s.storage[0].alloc_count),
+                    static_cast<unsigned long long>(s.storage[1].alloc_count),
+                    static_cast<unsigned long long>(s.storage[2].alloc_count),
+                    static_cast<unsigned long long>(s.storage[0].free_count),
+                    static_cast<unsigned long long>(s.storage[1].free_count),
+                    static_cast<unsigned long long>(s.storage[2].free_count),
+                    static_cast<unsigned long long>(s.storage[0].pool_hits),
+                    static_cast<unsigned long long>(s.storage[1].pool_hits),
+                    static_cast<unsigned long long>(s.storage[2].pool_hits),
+                    static_cast<unsigned long long>(s.storage[0].pool_misses),
+                    static_cast<unsigned long long>(s.storage[1].pool_misses),
+                    static_cast<unsigned long long>(s.storage[2].pool_misses));
     }
     std::printf("}\n");
 }
@@ -354,7 +419,9 @@ static void print_usage(const char* argv0) {
         "  --bench NAME          add one benchmark; may be repeated\n"
         "                        same_size, same_size_64, same_size_256, batch, random,\n"
         "                        fragmentation, cross_thread_free, latency_sample,\n"
-        "                        phase_changing\n"
+        "                        phase_changing, throughput_server, realtime_latency,\n"
+        "                        memory_constrained, producer_consumer, large_streaming,\n"
+        "                        debug_safety\n"
         "  --json                print one JSON object per result\n"
         "  --repeats N           repeat each benchmark and report aggregate stats\n"
         "  --iters N             iterations for same-size/fragmentation/latency tests\n"
@@ -514,6 +581,34 @@ static bool run_one(const StrategyDescriptor& s,
         out = phase_changing_workload(s, cfg.iters, cfg.slots, cfg.seed);
         return true;
     }
+    if (name == "throughput_server") {
+        out = batch_workload(s, cfg.batch * 2, cfg.rounds);
+        out.name = "throughput_server";
+        return true;
+    }
+    if (name == "realtime_latency") {
+        out = latency_sample_workload(s, cfg.size, cfg.iters, 50);
+        out.name = "realtime_latency";
+        return true;
+    }
+    if (name == "memory_constrained") {
+        out = phase_changing_workload(s, cfg.iters, cfg.slots, cfg.seed);
+        out.name = "memory_constrained";
+        return true;
+    }
+    if (name == "producer_consumer") {
+        out = cross_thread_free_workload(s, cfg.threads, cfg.batch, cfg.min_size, cfg.max_size, cfg.seed);
+        out.name = "producer_consumer";
+        return true;
+    }
+    if (name == "large_streaming") {
+        out = large_streaming_workload(s, std::max(1, cfg.iters / 8));
+        return true;
+    }
+    if (name == "debug_safety") {
+        out = debug_safety_workload(s, std::max(1, cfg.iters / 16), strategy_is_adaptive(s.name));
+        return true;
+    }
     std::fprintf(stderr, "unknown benchmark '%s'\n", name.c_str());
     return false;
 }
@@ -570,24 +665,29 @@ int main(int argc, char** argv) {
                             summary.min, summary.max, last.ms, last.peak_rss_kb);
                 if (strategy_is_adaptive(loaded.desc.name)) {
                     auto s = my_ptmalloc::adaptive_stats_snapshot();
-                    auto control = my_ptmalloc::adaptive_control_state_snapshot();
-                    std::printf(",\"adaptive\":{\"architecture_switches\":%llu,"
-                                "\"mechanism_switches\":%llu,\"parameter_decisions\":%llu,"
-                                "\"control_version\":%u,\"control_preset\":\"%s\","
-                                "\"release_policy\":\"%s\",\"large_path_preferred\":%s,"
-                                "\"remote_free_reserved\":%s,\"mapped_bytes\":%lld,"
-                                "\"live_bytes\":%lld,\"mapped_live_ratio\":%.3f}",
-                                static_cast<unsigned long long>(s.architecture_switches),
-                                static_cast<unsigned long long>(s.mechanism_switches),
-                                static_cast<unsigned long long>(s.parameter_decisions),
-                                control.version,
-                                my_ptmalloc::adaptive_profile_name(control.control_preset),
-                                control.empty_release_enabled ? "enabled" : "disabled",
-                                control.large_path_preferred ? "true" : "false",
-                                control.remote_free_reserved ? "true" : "false",
+                    std::printf(",\"adaptive\":{\"current_mode\":\"%s\",\"active_mode\":\"%s\","
+                                "\"previous_mode\":\"%s\",\"mode_switches\":%llu,"
+                                "\"retired_mode_count\":%llu,\"mapped_bytes\":%lld,"
+                                "\"live_bytes\":%lld,\"mapped_live_ratio\":%.3f,"
+                                "\"remote_free_ratio\":%.3f,\"size_entropy\":%.3f,"
+                                "\"large_bytes_ratio\":%.3f,\"fragmentation_estimate\":%.3f,"
+                                "\"slow_path_ratio\":%.3f,\"double_free_count\":%llu,"
+                                "\"invalid_free_count\":%llu}",
+                                my_ptmalloc::adaptive_mode_name(s.current_mode),
+                                my_ptmalloc::adaptive_mode_name(s.active_mode),
+                                my_ptmalloc::adaptive_mode_name(s.previous_mode),
+                                static_cast<unsigned long long>(s.mode_switches),
+                                static_cast<unsigned long long>(s.retired_mode_count),
                                 static_cast<long long>(s.mapped_bytes),
                                 static_cast<long long>(s.live_bytes),
-                                s.mapped_live_ratio);
+                                s.mapped_live_ratio,
+                                s.remote_free_ratio,
+                                s.size_entropy,
+                                s.large_bytes_ratio,
+                                s.fragmentation_estimate,
+                                s.slow_path_ratio,
+                                static_cast<unsigned long long>(s.double_free_count),
+                                static_cast<unsigned long long>(s.invalid_free_count));
                 }
                 std::printf("}\n");
             } else {

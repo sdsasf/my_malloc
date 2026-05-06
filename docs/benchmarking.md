@@ -61,7 +61,7 @@ build/libmy_ptmalloc.so
 | `tcmalloc_like` | Teaching thread-cache/central-list/span allocator |
 | `jemalloc_like` | Teaching arena/run/tcache allocator |
 | `mimalloc_like` | Teaching per-thread heap/page/remote-free allocator |
-| `adaptive` | Independent adaptive backend with internal strategy policy |
+| `adaptive` | Independent multi-mode adaptive backend |
 | `adaptive_demo` / `demo_all` | Legacy demo policy over teaching implementations |
 | `libc` / `glibc` | System allocator baseline |
 | `plugin:path.so` | External allocator strategy |
@@ -124,29 +124,26 @@ Adaptive-specific runtime parameters can be set through the environment when `--
 
 | Env var | Meaning |
 |---|---|
-| `MY_MALLOC_ADAPTIVE_POLICY` | Compatibility mechanism-selection policy: `heuristic`, `fixed:small`, `fixed:medium`, `fixed:large`, `round_robin`, `epsilon_greedy`, `ucb1`, `thompson_sampling`. |
-| `MY_MALLOC_ADAPTIVE_PARAM_POLICY` | Parameter policy: `static`, `heuristic`, `coordinate_bandit`, `bayesian_offline`. |
-| `MY_MALLOC_ADAPTIVE_ARCH_WINDOW` | Legacy name for the telemetry-driven mechanism-control window. |
-| `MY_MALLOC_ADAPTIVE_PARAM_WINDOW` | Allocation window for parameter tuning. |
+| `MY_MALLOC_ADAPTIVE_MODE` | `balanced`, `throughput_cache`, `deterministic_latency`, `compact_rss`, `fragmentation_stable`, `cross_thread`, `large_object`, `hardened_debug`, or `auto`. |
+| `MY_MALLOC_ADAPTIVE_MODE_SELECTOR` | `rule`, `fixed`, or `manual`. |
+| `MY_MALLOC_ADAPTIVE_MODE_WINDOW` | Rule-selector observation window. |
+| `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` | Cooldown in windows after a mode switch. |
+| `MY_MALLOC_ADAPTIVE_DEBUG_MODE` | Force `hardened_debug` when set to `1`. |
 | `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` | Initial small-object page size. |
 | `MY_MALLOC_ADAPTIVE_MEDIUM_SPAN_SIZE` | Initial medium-object span size. |
-| `MY_MALLOC_ADAPTIVE_LOCAL_BATCH` | Batch-size hint for future local-cache work. |
 | `MY_MALLOC_ADAPTIVE_EMPTY_CACHE_LIMIT` | Empty page/span keep count before release. |
-| `MY_MALLOC_ADAPTIVE_COOLDOWN_WINDOWS` | Cooldown after mechanism preference changes. |
-| `MY_MALLOC_ADAPTIVE_PROFILE` | Initial control preset/objective: `balanced`, `low_latency`, `low_rss`, `large_heavy`, `cross_thread`. |
 
 Examples:
 
 ```bash
-MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=heuristic \
-  ./build/bench_runner --strategy adaptive --profile micro --json
+MY_MALLOC_ADAPTIVE_MODE=throughput_cache \
+  ./build/bench_runner --strategy adaptive --bench throughput_server --json
 
-MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=static \
-  MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE=32768 \
-  ./build/bench_runner --strategy adaptive --bench same_size --size 64
+MY_MALLOC_ADAPTIVE_MODE=compact_rss \
+  ./build/bench_runner --strategy adaptive --bench memory_constrained --json
 
-./build/bench_runner --strategy adaptive --bench phase_changing --json
-./build/bench_runner --strategy adaptive --bench same_size_64 --repeats 5 --json
+MY_MALLOC_ADAPTIVE_MODE=auto MY_MALLOC_ADAPTIVE_MODE_WINDOW=64 \
+  ./build/bench_runner --strategy adaptive --bench producer_consumer --json
 ```
 
 JSON example:
@@ -156,7 +153,7 @@ JSON example:
 ```
 
 ```json
-{"strategy":"adaptive","benchmark":"same_size_64","ops_per_sec":24430358,"ms":40.933,"peak_rss_kb":31104,"adaptive":{"architecture_switches":0,"mechanism_switches":0,"parameter_decisions":0,"config_version":1,"control_version":1,"profile":"balanced","control_preset":"balanced","release_policy":"enabled","large_path_preferred":false,"remote_free_reserved":false,"mapped_bytes":0,"live_bytes":0,"mapped_live_ratio":0.000,"empty_pages":0,"empty_spans":0,"released_pages":0,"released_spans":0,"release_unmapped_bytes":0,"strategy_allocs":[1000,0,0],"strategy_frees":[1000,0,0],"pool_hits":[999,0,0],"pool_misses":[1,0,0]}}
+{"strategy":"adaptive","benchmark":"same_size_64","ops_per_sec":24000000,"ms":41.000,"peak_rss_kb":31104,"adaptive":{"current_mode":"balanced","active_mode":"balanced","previous_mode":"balanced","mode_switches":0,"retired_mode_count":0,"mapped_bytes":0,"live_bytes":0,"mapped_live_ratio":0.000,"remote_free_ratio":0.000,"size_entropy":0.000,"large_bytes_ratio":0.000,"fragmentation_estimate":0.000,"slow_path_ratio":0.000,"double_free_count":0,"invalid_free_count":0}}
 ```
 
 When `--repeats N` is greater than 1, JSON output reports aggregate `mean`, `median`, `p95`, `stddev`, `min`, and `max` operation rates instead of relying on a single sample.
@@ -332,120 +329,21 @@ Detailed raw-result notes are in [external_benchmark_results.md](external_benchm
 
 ## 14. Current Multi-mode Results
 
-The latest focused local run was performed on May 6, 2026 after adding mechanism control, window stats, and parameter tuning.
+Use the mode-specific workloads to compare adaptive mode behavior:
 
 ```bash
 cmake --build build -j2
 ctest --test-dir build --output-on-failure
 
-./build/bench_runner --strategy libc --profile micro --json
-./build/bench_runner --strategy adaptive --profile micro --json
-MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=static ./build/bench_runner --strategy adaptive --profile micro --json
-MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=heuristic ./build/bench_runner --strategy adaptive --profile micro --json
-MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=coordinate_bandit ./build/bench_runner --strategy adaptive --profile micro --json
-./build/bench_runner --strategy libc --profile stress --json
-MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=heuristic ./build/bench_runner --strategy adaptive --profile stress --json
+MY_MALLOC_ADAPTIVE_MODE=throughput_cache ./build/bench_runner --strategy adaptive --bench throughput_server --json
+MY_MALLOC_ADAPTIVE_MODE=deterministic_latency ./build/bench_runner --strategy adaptive --bench realtime_latency --json
+MY_MALLOC_ADAPTIVE_MODE=compact_rss ./build/bench_runner --strategy adaptive --bench memory_constrained --json
+MY_MALLOC_ADAPTIVE_MODE=cross_thread ./build/bench_runner --strategy adaptive --bench producer_consumer --json
+MY_MALLOC_ADAPTIVE_MODE=large_object ./build/bench_runner --strategy adaptive --bench large_streaming --json
+MY_MALLOC_ADAPTIVE_MODE=hardened_debug ./build/bench_runner --strategy adaptive --bench debug_safety --json
 ```
 
-### 14.1 Latest Adaptive Two-layer Sample
-
-| Strategy / config | `same_size_64` | `same_size_256` | `batch` | `random` | Peak RSS KB |
-|---|---:|---:|---:|---:|---:|
-| `libc` | 12,574,450 | 9,694,595 | 7,019,472 | 996,505 | 30,976 |
-| `adaptive` default | 24,430,358 | 24,197,039 | 9,799,662 | 814,750 | 31,104 |
-| `adaptive`, `ucb1+static` | 27,902,697 | 28,317,132 | 10,642,325 | 840,813 | 30,848 |
-| `adaptive`, `ucb1+heuristic` | 24,653,533 | 25,055,846 | 9,568,574 | 1,047,587 | 31,104 |
-| `adaptive`, `ucb1+coordinate_bandit` | 20,157,150 | 20,690,505 | 9,333,185 | 927,191 | 30,976 |
-
-Stress sample:
-
-| Strategy / config | `random` | `fragmentation` | `cross_thread_free` | Peak RSS KB |
-|---|---:|---:|---:|---:|
-| `libc` | 1,304,079 | 1,392,338 | 881,577 | 58,880 |
-| `adaptive`, `ucb1+heuristic` | 1,302,661 | 1,613,490 | 820,079 | 59,008 |
-
-Interpretation:
-
-- Windowed adaptive routing keeps hot-path micro throughput competitive with `libc` in this local run.
-- `ucb1+static` is strongest among the tested configurations for steady same-size and batch micro workloads.
-- `ucb1+heuristic` is strongest among the tested adaptive configurations for random micro and fragmentation stress.
-- Cross-thread stress still trails `libc`; owner-thread queues and per-thread/per-CPU adaptive caches remain important next steps.
-
-The broader multi-mode run below was performed on May 5, 2026 after adding the independent adaptive allocator, adaptive small/medium page-span pools, and telemetry-driven adaptive policies. It is kept as a historical comparison across all teaching allocators.
-
-```bash
-cmake --build build -j2
-ctest --test-dir build --output-on-failure
-
-for s in libc hybrid ptmalloc tcmalloc_like jemalloc_like mimalloc_like adaptive; do
-  ./build/bench_runner --strategy "$s" --profile micro --json
-  ./build/bench_runner --strategy "$s" --profile stress --json
-done
-```
-
-The run compares the teaching allocator implementations, the self-developed `adaptive` allocator, and `libc` as a baseline. Values are operations per second; higher is better. Peak RSS is the maximum KB observed in that profile's subtests.
-
-### 14.2 Allocator Micro Profile
-
-| Strategy | `same_size_64` | `same_size_256` | `batch` | `random` | Peak RSS KB |
-|---|---:|---:|---:|---:|---:|
-| `libc` | 12,822,325 | 13,022,034 | 7,127,544 | 1,046,455 | 31,104 |
-| `hybrid` | 27,823,527 | 27,500,649 | 10,936,918 | 1,102,044 | 31,104 |
-| `ptmalloc` | 26,197,541 | 26,693,840 | 11,054,527 | 1,157,274 | 30,976 |
-| `tcmalloc_like` | 26,748,702 | 10,528,622 | 3,796,048 | 759,696 | 30,848 |
-| `jemalloc_like` | 18,887,703 | 19,252,725 | 8,979,967 | 816,400 | 31,104 |
-| `mimalloc_like` | 23,087,757 | 22,974,563 | 9,218,316 | 947,105 | 30,976 |
-| `adaptive` | 23,284,677 | 12,417,979 | 3,073,215 | 827,614 | 30,976 |
-
-### 14.3 Allocator Stress Profile
-
-| Strategy | `random` | `fragmentation` | `cross_thread_free` | Peak RSS KB |
-|---|---:|---:|---:|---:|
-| `libc` | 1,027,949 | 1,438,969 | 842,192 | 59,008 |
-| `hybrid` | 1,371,708 | 1,306,031 | 835,924 | 58,880 |
-| `ptmalloc` | 1,549,313 | 1,559,973 | 696,488 | 59,008 |
-| `tcmalloc_like` | 1,161,121 | 1,518,785 | 1,094,520 | 58,752 |
-| `jemalloc_like` | 1,622,627 | 1,813,802 | 976,109 | 58,880 |
-| `mimalloc_like` | 1,599,208 | 1,517,392 | 732,602 | 58,860 |
-| `adaptive` | 1,296,166 | 1,380,093 | 910,505 | 58,752 |
-
-### 14.4 Adaptive Policy Micro Profile
-
-Command:
-
-```bash
-for p in heuristic epsilon_greedy ucb1 thompson_sampling round_robin fixed:small fixed:medium fixed:large; do
-  MY_MALLOC_ADAPTIVE_POLICY="$p" ./build/bench_runner --strategy adaptive --profile micro --json
-done
-```
-
-| Adaptive policy | `same_size_64` | `same_size_256` | `batch` | `random` | Peak RSS KB |
-|---|---:|---:|---:|---:|---:|
-| `heuristic` | 8,185,376 | 21,523,521 | 8,230,347 | 844,231 | 30,976 |
-| `epsilon_greedy` | 19,812,613 | 24,467,825 | 8,217,441 | 923,744 | 30,976 |
-| `ucb1` | 22,236,701 | 24,847,005 | 9,492,521 | 922,979 | 30,976 |
-| `thompson_sampling` | 18,707,184 | 15,425,862 | 2,483,404 | 796,735 | 30,976 |
-| `round_robin` | 22,045,714 | 23,955,222 | 10,005,564 | 1,071,706 | 30,976 |
-| `fixed:small` | 22,356,535 | 24,069,442 | 8,743,437 | 864,238 | 30,976 |
-| `fixed:medium` | 23,401,058 | 23,942,701 | 9,224,166 | 1,074,517 | 30,976 |
-| `fixed:large` | 26,608,120 | 25,306,594 | 3,898,270 | 820,242 | 31,104 |
-
-### 14.5 Adaptive Policy Stress Profile
-
-| Adaptive policy | `random` | `fragmentation` | `cross_thread_free` | Peak RSS KB |
-|---|---:|---:|---:|---:|
-| `heuristic` | 889,083 | 1,694,512 | 753,009 | 58,880 |
-| `ucb1` | 1,571,848 | 1,688,021 | 691,817 | 58,752 |
-| `thompson_sampling` | 731,785 | 1,595,027 | 836,038 | 58,860 |
-| `epsilon_greedy` | 1,528,203 | 1,488,548 | 941,306 | 58,880 |
-
-Interpretation:
-
-- `hybrid` and `ptmalloc` are strongest in this micro matrix on fixed-size and batch workloads.
-- `jemalloc_like` leads the stress fragmentation sample, which matches its arena/run organization goal in this simplified benchmark.
-- `tcmalloc_like` leads the stress cross-thread sample in this run, while `mimalloc_like` is not yet showing its expected remote-free advantage. That points to tuning gaps in the simplified mimalloc-like page/remote-free model or in the benchmark shape.
-- `adaptive` is competitive in some stress cases but still pays overhead from policy/telemetry, the page ownership filter, per-class locking, and conservative page/span release.
-- Among adaptive policies, `ucb1` is a strong telemetry-driven baseline on micro batch/random and stress random/fragmentation in this run. `epsilon_greedy` leads adaptive stress cross-thread. `thompson_sampling` is currently less stable and should be treated as a baseline, not a tuned model.
+JSON output includes mode telemetry, so current measurements should be interpreted by mode (`current_mode`, per-mode counts, remote-free ratio, large-bytes ratio, fragmentation estimate, and mapped/live ratio).
 
 External `mimalloc-bench glibc-simple` was also run through LD_PRELOAD for all modes:
 

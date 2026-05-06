@@ -15,7 +15,7 @@ constexpr size_t KIND_COUNT = 5;
 std::atomic<uint64_t> rr_counter{0};
 std::atomic<uint64_t> bandit_counts[KIND_COUNT]{};
 bool policy_initialized = false;
-AdaptivePolicyKind policy_kind = AdaptivePolicyKind::Heuristic;
+DemoPolicyKind policy_kind = DemoPolicyKind::Heuristic;
 RuntimeAllocatorKind fixed_kind = RuntimeAllocatorKind::Hybrid;
 
 [[nodiscard]] size_t kind_index(RuntimeAllocatorKind kind) noexcept {
@@ -51,27 +51,27 @@ void init_policy() noexcept {
     if (policy_initialized) return;
     policy_initialized = true;
 
-    const char* policy = std::getenv("MY_MALLOC_ADAPTIVE_POLICY");
+    const char* policy = std::getenv("MY_MALLOC_DEMO_POLICY");
     if (!policy || streq(policy, "heuristic")) {
-        policy_kind = AdaptivePolicyKind::Heuristic;
+        policy_kind = DemoPolicyKind::Heuristic;
         return;
     }
     if (streq(policy, "round_robin")) {
-        policy_kind = AdaptivePolicyKind::RoundRobin;
+        policy_kind = DemoPolicyKind::RoundRobin;
         return;
     }
     if (streq(policy, "bandit") || streq(policy, "rl_bandit")) {
-        policy_kind = AdaptivePolicyKind::Bandit;
+        policy_kind = DemoPolicyKind::Bandit;
         return;
     }
     constexpr const char* fixed_prefix = "fixed:";
     constexpr size_t fixed_prefix_len = 6;
     if (std::strncmp(policy, fixed_prefix, fixed_prefix_len) == 0) {
-        policy_kind = AdaptivePolicyKind::Fixed;
+        policy_kind = DemoPolicyKind::Fixed;
         fixed_kind = parse_allocator_kind(policy + fixed_prefix_len, RuntimeAllocatorKind::Hybrid);
         return;
     }
-    policy_kind = AdaptivePolicyKind::Heuristic;
+    policy_kind = DemoPolicyKind::Heuristic;
 }
 
 [[nodiscard]] RuntimeAllocatorKind heuristic_select(size_t size) noexcept {
@@ -126,13 +126,13 @@ RuntimeAllocatorKind runtime_select_allocator(size_t size) noexcept {
             // Legacy demo: dispatch across teaching allocators
             init_policy();
             switch (policy_kind) {
-                case AdaptivePolicyKind::Heuristic:
+                case DemoPolicyKind::Heuristic:
                     return heuristic_select(size);
-                case AdaptivePolicyKind::RoundRobin:
+                case DemoPolicyKind::RoundRobin:
                     return round_robin_select();
-                case AdaptivePolicyKind::Bandit:
+                case DemoPolicyKind::Bandit:
                     return bandit_select(size);
-                case AdaptivePolicyKind::Fixed:
+                case DemoPolicyKind::Fixed:
                     return fixed_kind;
             }
     }
@@ -155,20 +155,20 @@ const char* runtime_allocator_name(RuntimeAllocatorKind kind) noexcept {
     return "unknown";
 }
 
-AdaptivePolicyKind runtime_adaptive_policy() noexcept {
+DemoPolicyKind runtime_demo_policy() noexcept {
     init_policy();
     return policy_kind;
 }
 
-const char* runtime_adaptive_policy_name() noexcept {
-    switch (runtime_adaptive_policy()) {
-        case AdaptivePolicyKind::Heuristic:
+const char* runtime_demo_policy_name() noexcept {
+    switch (runtime_demo_policy()) {
+        case DemoPolicyKind::Heuristic:
             return "heuristic";
-        case AdaptivePolicyKind::RoundRobin:
+        case DemoPolicyKind::RoundRobin:
             return "round_robin";
-        case AdaptivePolicyKind::Bandit:
+        case DemoPolicyKind::Bandit:
             return "bandit";
-        case AdaptivePolicyKind::Fixed:
+        case DemoPolicyKind::Fixed:
             return "fixed";
     }
     return "unknown";
