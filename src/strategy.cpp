@@ -3,6 +3,7 @@
 #include "my_ptmalloc/strategy.h"
 #include "my_ptmalloc/my_malloc.h"
 #include "my_ptmalloc/adaptive_allocator.h"
+#include "my_ptmalloc/allocator_lab.h"
 
 #include <cstdlib>
 
@@ -18,37 +19,37 @@ void noop_init() noexcept {}
 void noop_shutdown() noexcept {}
 
 void hybrid_init() noexcept {
-    setenv("MY_MALLOC_MODE", "hybrid", 1);
+    allocator_lab_force_mode(AllocMode::Hybrid);
     my_malloc_init();
 }
 
 void ptmalloc_init() noexcept {
-    setenv("MY_MALLOC_MODE", "ptmalloc", 1);
+    allocator_lab_force_mode(AllocMode::PtmallocOnly);
     my_malloc_init();
 }
 
 void tcmalloc_like_init() noexcept {
-    setenv("MY_MALLOC_MODE", "tcmalloc_like", 1);
+    allocator_lab_force_mode(AllocMode::TcmallocLike);
     my_malloc_init();
 }
 
 void jemalloc_like_init() noexcept {
-    setenv("MY_MALLOC_MODE", "jemalloc_like", 1);
+    allocator_lab_force_mode(AllocMode::JemallocLike);
     my_malloc_init();
 }
 
 void mimalloc_like_init() noexcept {
-    setenv("MY_MALLOC_MODE", "mimalloc_like", 1);
+    allocator_lab_force_mode(AllocMode::MimallocLike);
     my_malloc_init();
 }
 
 void adaptive_init() noexcept {
-    setenv("MY_MALLOC_MODE", "adaptive", 1);
+    allocator_lab_force_mode(AllocMode::Adaptive);
     my_malloc_init();
 }
 
 void adaptive_demo_init() noexcept {
-    setenv("MY_MALLOC_MODE", "adaptive_demo", 1);
+    allocator_lab_force_mode(AllocMode::AdaptiveDemo);
     my_malloc_init();
 }
 
@@ -78,6 +79,16 @@ StrategyStats adaptive_stats_wrap() noexcept {
     };
 }
 
+StrategyStats lab_stats_wrap() noexcept {
+    AllocStatsSnapshot s = my_malloc_stats_snapshot();
+    return StrategyStats{
+        s.malloc_calls,
+        s.free_calls,
+        s.realloc_calls,
+        0,
+    };
+}
+
 } // namespace
 
 StrategyDescriptor hybrid_strategy_descriptor() noexcept {
@@ -92,7 +103,7 @@ StrategyDescriptor hybrid_strategy_descriptor() noexcept {
             my_free,
             my_realloc,
             my_malloc_usable_size,
-            adaptive_stats_wrap,
+            lab_stats_wrap,
         },
     };
 }
@@ -109,7 +120,7 @@ StrategyDescriptor ptmalloc_strategy_descriptor() noexcept {
             my_free,
             my_realloc,
             my_malloc_usable_size,
-            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
+            adaptive_stats_wrap,
         },
     };
 }

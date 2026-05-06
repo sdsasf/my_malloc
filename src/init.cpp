@@ -27,11 +27,9 @@ AllocPipeline*    g_alloc_pipeline    = nullptr;
 
 // ─── Init ───
 
-static bool g_initialized = false;
+static pthread_once_t g_init_once = PTHREAD_ONCE_INIT;
 
-void my_malloc_init() noexcept {
-    if (g_initialized) return;
-    g_initialized = true;
+static void my_malloc_init_once() noexcept {
     allocator_lab_init();
 
     // Create arena manager (initializes main arena and top chunk)
@@ -41,6 +39,10 @@ void my_malloc_init() noexcept {
     // Create allocation pipeline
     static AllocPipeline pipeline_storage;
     g_alloc_pipeline = &pipeline_storage;
+}
+
+void my_malloc_init() noexcept {
+    pthread_once(&g_init_once, my_malloc_init_once);
 }
 
 // ─── Arena implementation ───

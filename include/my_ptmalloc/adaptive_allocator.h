@@ -39,6 +39,14 @@ enum class AdaptiveParameterPolicy : uint8_t {
     BayesianOffline = 3,   // consume offline tuned/env parameters at runtime
 };
 
+enum class AdaptiveProfileId : uint8_t {
+    Balanced    = 0,
+    LowLatency  = 1,
+    LowRss      = 2,
+    LargeHeavy  = 3,
+    CrossThread = 4,
+};
+
 // --- Adaptive block header (prepended to every allocation) -----------------
 
 static constexpr uint32_t ADAPTIVE_MAGIC = 0xADA9'B10C;  // "ADA-BLOC"
@@ -75,6 +83,7 @@ struct AdaptiveObservation {
     uint64_t           avg_alloc_latency_ns;
     uint64_t           pool_hits;
     uint64_t           pool_misses;
+    AdaptiveProfileId  profile;
     bool               success;
     // Future: phase id, remote-free ratio, contention level, etc.
 };
@@ -102,6 +111,11 @@ struct AdaptiveStats {
     std::atomic<uint64_t> policy_decisions{0};
     std::atomic<uint64_t> architecture_switches{0};
     std::atomic<uint64_t> parameter_decisions{0};
+    std::atomic<uint64_t> empty_pages{0};
+    std::atomic<uint64_t> empty_spans{0};
+    std::atomic<uint64_t> released_pages{0};
+    std::atomic<uint64_t> released_spans{0};
+    std::atomic<uint64_t> release_unmapped_bytes{0};
 
     // per-strategy
     static constexpr size_t NUM_STRATEGIES = 3;
@@ -120,6 +134,11 @@ struct AdaptiveStatsSnapshot {
     uint64_t policy_decisions;
     uint64_t architecture_switches;
     uint64_t parameter_decisions;
+    uint64_t empty_pages;
+    uint64_t empty_spans;
+    uint64_t released_pages;
+    uint64_t released_spans;
+    uint64_t release_unmapped_bytes;
 
     struct PerStrategy {
         uint64_t alloc_count;
@@ -137,6 +156,7 @@ struct AdaptiveStatsSnapshot {
 
     int64_t live_bytes;
     int64_t mapped_bytes;
+    double mapped_live_ratio;
 };
 
 struct AdaptiveConfigSnapshot {
@@ -147,6 +167,23 @@ struct AdaptiveConfigSnapshot {
     uint32_t architecture_window;
     uint32_t parameter_window;
     uint32_t local_batch_size;
+    uint32_t empty_cache_limit;
+    uint32_t cooldown_windows;
+    AdaptiveProfileId profile;
+};
+
+struct AdaptiveWindowSnapshot {
+    uint64_t alloc_calls;
+    uint64_t free_calls;
+    uint64_t realloc_calls;
+    uint64_t strategy_allocs[3];
+    uint64_t pool_hits[3];
+    uint64_t pool_misses[3];
+    uint64_t architecture_switches;
+    uint64_t parameter_decisions;
+    uint64_t failure_count;
+    int64_t live_bytes;
+    int64_t mapped_bytes;
 };
 
 // --- Public API ------------------------------------------------------------
@@ -170,5 +207,7 @@ void adaptive_stats_reset() noexcept;
 [[nodiscard]] AdaptiveParameterPolicy adaptive_current_parameter_policy() noexcept;
 [[nodiscard]] const char* adaptive_parameter_policy_name(AdaptiveParameterPolicy p) noexcept;
 [[nodiscard]] AdaptiveConfigSnapshot adaptive_config_snapshot() noexcept;
+[[nodiscard]] AdaptiveWindowSnapshot adaptive_window_snapshot() noexcept;
+[[nodiscard]] const char* adaptive_profile_name(AdaptiveProfileId p) noexcept;
 
 } // namespace my_ptmalloc

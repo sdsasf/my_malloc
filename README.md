@@ -153,6 +153,9 @@ Important adaptive knobs:
 | `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` | Initial small-object page size. |
 | `MY_MALLOC_ADAPTIVE_MEDIUM_SPAN_SIZE` | Initial medium-object span size. |
 | `MY_MALLOC_ADAPTIVE_LOCAL_BATCH` | Local-cache batch hint for future adaptive cache work. |
+| `MY_MALLOC_ADAPTIVE_EMPTY_CACHE_LIMIT` | Empty page/span cache limit before release. |
+| `MY_MALLOC_ADAPTIVE_COOLDOWN_WINDOWS` | Cooldown after profile/architecture switches. |
+| `MY_MALLOC_ADAPTIVE_PROFILE` | Initial profile: `balanced`, `low_latency`, `low_rss`, `large_heavy`, `cross_thread`. |
 
 Enable optional observability:
 
@@ -202,6 +205,8 @@ Run individual workloads:
 ./build/bench_runner --strategy hybrid --bench random --random-iters 500000 --slots 8192
 ./build/bench_runner --strategy hybrid --bench fragmentation --iters 100000 --min-size 16 --max-size 16384
 ./build/bench_runner --strategy hybrid --bench cross_thread_free --threads 8 --batch 10000
+./build/bench_runner --strategy adaptive --bench phase_changing --json
+./build/bench_runner --strategy adaptive --bench same_size_64 --repeats 5 --json
 ```
 
 External benchmarks:
@@ -262,14 +267,14 @@ The results are useful for learning because they expose concrete design tradeoff
 - `adaptive` can beat `libc` on the local micro hot paths, and `ucb1+heuristic` is competitive on the random micro sample;
 - `ucb1+static` is the strongest tested configuration for steady same-size and batch micro workloads;
 - `ucb1+heuristic` is the strongest tested adaptive configuration for random micro and fragmentation stress in this sample;
-- `adaptive` still pays overhead from telemetry, ownership registry, simple locked pools, and no page/span release;
+- `adaptive` now has an ownership fast path, per-class pool locks, window delta stats, and conservative empty page/span release;
 - broader LD_PRELOAD and external workload results are still needed before making general claims.
 
 ## Current Limitations
 
-- Empty slabs are cached but not yet returned to the OS.
+- Empty slabs in the hybrid frontend are cached but not yet returned to the OS.
 - Cross-thread slab frees do not yet use owner-thread remote-free queues.
 - The size-class table is simple 16-byte spacing, not a production-tuned table.
 - Large allocation and extent management are simpler than jemalloc/tcmalloc/mimalloc.
-- The adaptive backend now has dedicated small pages, medium spans, windowed architecture switching, and a separate parameter tuning layer, but it still uses simple locked pools, uniform size classes, and no empty page/span release. Full contextual ML/RL policy work and a general adaptive architecture registry are future extensions over adaptive-internal signals.
+- The adaptive backend now has dedicated small pages, medium spans, windowed architecture switching, parameter tuning, ownership fast path, per-class locks, window stats, and conservative empty release. It still lacks real thread-local caches, remote-free queues, profile-specific schemas, and contextual ML/RL.
 - External benchmark coverage depends on local tools such as Redis, glibc benchtests, SQLite, clang, Z3, jemalloc, tcmalloc, and mimalloc.

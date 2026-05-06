@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <pthread.h>
 #include <sys/mman.h>
 
 namespace my_ptmalloc {
@@ -18,9 +19,10 @@ namespace my_ptmalloc {
 // --- Global state ----------------------------------------------------------
 
 static AdaptiveStats g_adaptive_stats;
-static bool g_adaptive_policy_initialized = false;
+static pthread_once_t g_adaptive_policy_once = PTHREAD_ONCE_INIT;
 static AdaptiveInternalPolicy g_adaptive_policy = AdaptiveInternalPolicy::Heuristic;
-static bool g_adaptive_parameter_policy_initialized = false;
+static pthread_once_t g_adaptive_parameter_policy_once = PTHREAD_ONCE_INIT;
+static pthread_once_t g_adaptive_config_once = PTHREAD_ONCE_INIT;
 static AdaptiveParameterPolicy g_adaptive_parameter_policy = AdaptiveParameterPolicy::Heuristic;
 static std::atomic<uint64_t> g_adaptive_rr_counter{0};
 static std::mutex g_adaptive_registry_mutex;
@@ -55,6 +57,11 @@ constexpr size_t ADAPTIVE_SMALL_PAGE_SIZE = 64 * 1024;
 constexpr size_t ADAPTIVE_MEDIUM_SPAN_SIZE = 256 * 1024;
 constexpr uint32_t ADAPTIVE_DEFAULT_ARCH_WINDOW = 4096;
 constexpr uint32_t ADAPTIVE_DEFAULT_PARAM_WINDOW = 8192;
+constexpr uint32_t ADAPTIVE_DEFAULT_EMPTY_CACHE_LIMIT = 2;
+constexpr uint32_t ADAPTIVE_DEFAULT_COOLDOWN_WINDOWS = 2;
+constexpr size_t ADAPTIVE_PAGE_TABLE_SIZE = 262144;
+constexpr size_t ADAPTIVE_PAGE_TABLE_PROBE = 16;
+constexpr uintptr_t ADAPTIVE_PAGE_TOMBSTONE = static_cast<uintptr_t>(-1);
 
 struct AdaptiveRuntimeConfig {
     uint32_t version;
@@ -63,10 +70,14 @@ struct AdaptiveRuntimeConfig {
     uint32_t architecture_window;
     uint32_t parameter_window;
     uint32_t local_batch_size;
+    uint32_t empty_cache_limit;
+    uint32_t cooldown_windows;
+    AdaptiveProfileId profile;
 };
 
-std::mutex g_adaptive_pool_mutex;
 std::mutex g_adaptive_config_mutex;
+std::mutex g_small_class_mutexes[ADAPTIVE_SMALL_CLASS_COUNT];
+std::mutex g_medium_class_mutexes[ADAPTIVE_MEDIUM_CLASS_COUNT];
 AdaptivePage* g_small_pages[ADAPTIVE_SMALL_CLASS_COUNT]{};
 AdaptivePage* g_medium_pages[ADAPTIVE_MEDIUM_CLASS_COUNT]{};
 std::atomic<uint32_t> g_config_version{1};
@@ -75,7 +86,11 @@ std::atomic<size_t> g_config_medium_span_size{ADAPTIVE_MEDIUM_SPAN_SIZE};
 std::atomic<uint32_t> g_config_architecture_window{ADAPTIVE_DEFAULT_ARCH_WINDOW};
 std::atomic<uint32_t> g_config_parameter_window{ADAPTIVE_DEFAULT_PARAM_WINDOW};
 std::atomic<uint32_t> g_config_local_batch_size{32};
+std::atomic<uint32_t> g_config_empty_cache_limit{ADAPTIVE_DEFAULT_EMPTY_CACHE_LIMIT};
+std::atomic<uint32_t> g_config_cooldown_windows{ADAPTIVE_DEFAULT_COOLDOWN_WINDOWS};
+std::atomic<uint8_t> g_config_profile{static_cast<uint8_t>(AdaptiveProfileId::Balanced)};
 std::atomic<uint64_t> g_arch_band_counters[3]{};
+std::atomic<uint64_t> g_arch_band_cooldown_until[3]{};
 std::atomic<uint8_t> g_arch_band_active[3]{
     static_cast<uint8_t>(AdaptiveStrategyId::SmallObject),
     static_cast<uint8_t>(AdaptiveStrategyId::MediumObject),
@@ -83,6 +98,22 @@ std::atomic<uint8_t> g_arch_band_active[3]{
 };
 std::atomic<uint64_t> g_param_counter{0};
 std::atomic<uint32_t> g_tuning_round{0};
+
+struct AdaptiveWindowBase {
+    uint64_t malloc_calls;
+    uint64_t free_calls;
+    uint64_t realloc_calls;
+    uint64_t strategy_allocs[3];
+    uint64_t pool_hits[3];
+    uint64_t pool_misses[3];
+    uint64_t architecture_switches;
+    uint64_t parameter_decisions;
+    uint64_t failure_count;
+};
+
+std::mutex g_window_mutex;
+AdaptiveWindowBase g_last_window{};
+std::atomic<uintptr_t> g_adaptive_page_table[ADAPTIVE_PAGE_TABLE_SIZE]{};
 
 } // namespace
 
@@ -116,10 +147,7 @@ static size_t adaptive_page_aligned(size_t value) noexcept {
     return (value + page - 1) & ~(page - 1);
 }
 
-static void adaptive_init_parameter_policy() noexcept {
-    if (g_adaptive_parameter_policy_initialized) return;
-    g_adaptive_parameter_policy_initialized = true;
-
+static void adaptive_init_parameter_policy_once() noexcept {
     const char* env = std::getenv("MY_MALLOC_ADAPTIVE_PARAM_POLICY");
     if (!env || adaptive_streq(env, "heuristic")) {
         g_adaptive_parameter_policy = AdaptiveParameterPolicy::Heuristic;
@@ -134,13 +162,21 @@ static void adaptive_init_parameter_policy() noexcept {
     }
 }
 
-static void adaptive_init_runtime_config() noexcept {
-    adaptive_init_parameter_policy();
+static void adaptive_init_parameter_policy() noexcept {
+    pthread_once(&g_adaptive_parameter_policy_once, adaptive_init_parameter_policy_once);
+}
 
+static AdaptiveProfileId parse_profile(const char* env) noexcept {
+    if (adaptive_streq(env, "low_latency")) return AdaptiveProfileId::LowLatency;
+    if (adaptive_streq(env, "low_rss")) return AdaptiveProfileId::LowRss;
+    if (adaptive_streq(env, "large_heavy")) return AdaptiveProfileId::LargeHeavy;
+    if (adaptive_streq(env, "cross_thread")) return AdaptiveProfileId::CrossThread;
+    return AdaptiveProfileId::Balanced;
+}
+
+static void adaptive_init_runtime_config_once() noexcept {
+    adaptive_init_parameter_policy();
     std::lock_guard<std::mutex> lock(g_adaptive_config_mutex);
-    static bool initialized = false;
-    if (initialized) return;
-    initialized = true;
 
     g_config_small_page_size.store(adaptive_page_aligned(
         static_cast<size_t>(adaptive_parse_u64_env("MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE",
@@ -172,6 +208,25 @@ static void adaptive_init_runtime_config() noexcept {
                                1,
                                1024)),
         std::memory_order_relaxed);
+    g_config_empty_cache_limit.store(static_cast<uint32_t>(
+        adaptive_parse_u64_env("MY_MALLOC_ADAPTIVE_EMPTY_CACHE_LIMIT",
+                               ADAPTIVE_DEFAULT_EMPTY_CACHE_LIMIT,
+                               0,
+                               128)),
+        std::memory_order_relaxed);
+    g_config_cooldown_windows.store(static_cast<uint32_t>(
+        adaptive_parse_u64_env("MY_MALLOC_ADAPTIVE_COOLDOWN_WINDOWS",
+                               ADAPTIVE_DEFAULT_COOLDOWN_WINDOWS,
+                               0,
+                               1024)),
+        std::memory_order_relaxed);
+    g_config_profile.store(static_cast<uint8_t>(
+        parse_profile(std::getenv("MY_MALLOC_ADAPTIVE_PROFILE"))),
+        std::memory_order_relaxed);
+}
+
+static void adaptive_init_runtime_config() noexcept {
+    pthread_once(&g_adaptive_config_once, adaptive_init_runtime_config_once);
 }
 
 static AdaptiveRuntimeConfig adaptive_runtime_config() noexcept {
@@ -183,12 +238,13 @@ static AdaptiveRuntimeConfig adaptive_runtime_config() noexcept {
     cfg.architecture_window = g_config_architecture_window.load(std::memory_order_relaxed);
     cfg.parameter_window = g_config_parameter_window.load(std::memory_order_relaxed);
     cfg.local_batch_size = g_config_local_batch_size.load(std::memory_order_relaxed);
+    cfg.empty_cache_limit = g_config_empty_cache_limit.load(std::memory_order_relaxed);
+    cfg.cooldown_windows = g_config_cooldown_windows.load(std::memory_order_relaxed);
+    cfg.profile = static_cast<AdaptiveProfileId>(g_config_profile.load(std::memory_order_relaxed));
     return cfg;
 }
 
-static void adaptive_init_policy() noexcept {
-    if (g_adaptive_policy_initialized) return;
-    g_adaptive_policy_initialized = true;
+static void adaptive_init_policy_once() noexcept {
     adaptive_init_runtime_config();
 
     const char* env = std::getenv("MY_MALLOC_ADAPTIVE_POLICY");
@@ -213,6 +269,10 @@ static void adaptive_init_policy() noexcept {
     }
 }
 
+static void adaptive_init_policy() noexcept {
+    pthread_once(&g_adaptive_policy_once, adaptive_init_policy_once);
+}
+
 // --- Strategy selection ----------------------------------------------------
 
 static AdaptiveStrategyId heuristic_strategy(size_t size) noexcept {
@@ -222,6 +282,9 @@ static AdaptiveStrategyId heuristic_strategy(size_t size) noexcept {
 }
 
 static size_t strategy_index(AdaptiveStrategyId id) noexcept;
+static bool adaptive_page_maybe_owned(void* ptr) noexcept;
+static void register_adaptive_region(void* base, size_t size) noexcept;
+static void unregister_adaptive_region(void* base, size_t size) noexcept;
 
 static size_t size_band_index(size_t size) noexcept {
     if (size <= ADAPTIVE_SMALL_MAX) return 0;
@@ -308,6 +371,56 @@ static AdaptiveStrategyId best_telemetry_strategy(const AdaptiveStrategyId* cand
         }
     }
     return best;
+}
+
+static AdaptiveStrategyId profile_preferred_strategy(size_t size,
+                                                     AdaptiveProfileId profile) noexcept {
+    switch (profile) {
+        case AdaptiveProfileId::LowLatency:
+            if (size <= ADAPTIVE_MEDIUM_MAX) return size <= ADAPTIVE_SMALL_MAX
+                ? AdaptiveStrategyId::SmallObject
+                : AdaptiveStrategyId::MediumObject;
+            return AdaptiveStrategyId::LargeObject;
+        case AdaptiveProfileId::LowRss:
+            return heuristic_strategy(size);
+        case AdaptiveProfileId::LargeHeavy:
+            if (size > ADAPTIVE_SMALL_MAX) return AdaptiveStrategyId::LargeObject;
+            return AdaptiveStrategyId::SmallObject;
+        case AdaptiveProfileId::CrossThread:
+        case AdaptiveProfileId::Balanced:
+            return heuristic_strategy(size);
+    }
+    return heuristic_strategy(size);
+}
+
+static AdaptiveStrategyId windowed_architecture_select(size_t size,
+                                                       const AdaptiveStrategyId* candidates,
+                                                       size_t count,
+                                                       AdaptiveStrategyId (*selector)(const AdaptiveStrategyId*, size_t)) noexcept {
+    size_t band = size_band_index(size);
+    AdaptiveRuntimeConfig cfg = adaptive_runtime_config();
+    uint64_t n = g_arch_band_counters[band].fetch_add(1, std::memory_order_relaxed);
+    uint64_t cooldown_until = g_arch_band_cooldown_until[band].load(std::memory_order_relaxed);
+    if (n == 0 || ((n % cfg.architecture_window) == 0 && n >= cooldown_until)) {
+        AdaptiveStrategyId chosen = selector(candidates, count);
+        AdaptiveStrategyId profile_preferred = profile_preferred_strategy(size, cfg.profile);
+        if (strategy_can_allocate(profile_preferred, size) &&
+            cfg.profile != AdaptiveProfileId::Balanced) {
+            chosen = profile_preferred;
+        }
+        uint8_t old = g_arch_band_active[band].exchange(static_cast<uint8_t>(chosen),
+                                                        std::memory_order_relaxed);
+        if (old != static_cast<uint8_t>(chosen)) {
+            g_adaptive_stats.architecture_switches.fetch_add(1, std::memory_order_relaxed);
+            uint64_t next_allowed = n + static_cast<uint64_t>(cfg.cooldown_windows) *
+                static_cast<uint64_t>(cfg.architecture_window);
+            g_arch_band_cooldown_until[band].store(next_allowed, std::memory_order_relaxed);
+        }
+        return chosen;
+    }
+    AdaptiveStrategyId active = static_cast<AdaptiveStrategyId>(
+        g_arch_band_active[band].load(std::memory_order_relaxed));
+    return strategy_can_allocate(active, size) ? active : heuristic_strategy(size);
 }
 
 static AdaptiveStrategyId epsilon_greedy_select(const AdaptiveStrategyId* candidates,
@@ -400,61 +513,19 @@ static AdaptiveStrategyId select_strategy(size_t size) noexcept {
         case AdaptiveInternalPolicy::EpsilonGreedy: {
             AdaptiveStrategyId candidates[3];
             size_t count = candidate_strategies(size, candidates);
-            size_t band = size_band_index(size);
-            AdaptiveRuntimeConfig cfg = adaptive_runtime_config();
-            uint64_t n = g_arch_band_counters[band].fetch_add(1, std::memory_order_relaxed);
-            if (n == 0 || (n % cfg.architecture_window) == 0) {
-                AdaptiveStrategyId chosen = epsilon_greedy_select(candidates, count);
-                uint8_t old = g_arch_band_active[band].exchange(static_cast<uint8_t>(chosen),
-                                                                std::memory_order_relaxed);
-                if (old != static_cast<uint8_t>(chosen)) {
-                    g_adaptive_stats.architecture_switches.fetch_add(1, std::memory_order_relaxed);
-                }
-                return chosen;
-            }
-            AdaptiveStrategyId active = static_cast<AdaptiveStrategyId>(
-                g_arch_band_active[band].load(std::memory_order_relaxed));
-            return strategy_can_allocate(active, size) ? active : heuristic_strategy(size);
+            return windowed_architecture_select(size, candidates, count, epsilon_greedy_select);
         }
 
         case AdaptiveInternalPolicy::Ucb1: {
             AdaptiveStrategyId candidates[3];
             size_t count = candidate_strategies(size, candidates);
-            size_t band = size_band_index(size);
-            AdaptiveRuntimeConfig cfg = adaptive_runtime_config();
-            uint64_t n = g_arch_band_counters[band].fetch_add(1, std::memory_order_relaxed);
-            if (n == 0 || (n % cfg.architecture_window) == 0) {
-                AdaptiveStrategyId chosen = ucb1_select(candidates, count);
-                uint8_t old = g_arch_band_active[band].exchange(static_cast<uint8_t>(chosen),
-                                                                std::memory_order_relaxed);
-                if (old != static_cast<uint8_t>(chosen)) {
-                    g_adaptive_stats.architecture_switches.fetch_add(1, std::memory_order_relaxed);
-                }
-                return chosen;
-            }
-            AdaptiveStrategyId active = static_cast<AdaptiveStrategyId>(
-                g_arch_band_active[band].load(std::memory_order_relaxed));
-            return strategy_can_allocate(active, size) ? active : heuristic_strategy(size);
+            return windowed_architecture_select(size, candidates, count, ucb1_select);
         }
 
         case AdaptiveInternalPolicy::ThompsonSampling: {
             AdaptiveStrategyId candidates[3];
             size_t count = candidate_strategies(size, candidates);
-            size_t band = size_band_index(size);
-            AdaptiveRuntimeConfig cfg = adaptive_runtime_config();
-            uint64_t n = g_arch_band_counters[band].fetch_add(1, std::memory_order_relaxed);
-            if (n == 0 || (n % cfg.architecture_window) == 0) {
-                AdaptiveStrategyId chosen = thompson_select(candidates, count);
-                uint8_t old = g_arch_band_active[band].exchange(static_cast<uint8_t>(chosen),
-                                                                std::memory_order_relaxed);
-                if (old != static_cast<uint8_t>(chosen)) {
-                    g_adaptive_stats.architecture_switches.fetch_add(1, std::memory_order_relaxed);
-                }
-                return chosen;
-            }
-            AdaptiveStrategyId active = static_cast<AdaptiveStrategyId>(
-                g_arch_band_active[band].load(std::memory_order_relaxed));
-            return strategy_can_allocate(active, size) ? active : heuristic_strategy(size);
+            return windowed_architecture_select(size, candidates, count, thompson_select);
         }
     }
     return heuristic_strategy(size);
@@ -475,6 +546,32 @@ static size_t strategy_index(AdaptiveStrategyId id) noexcept {
 
 static void* user_from_header(AdaptiveHeader* hdr) noexcept {
     return reinterpret_cast<char*>(hdr) + ADAPTIVE_HDR_OFFSET;
+}
+
+static bool valid_strategy_id(AdaptiveStrategyId id) noexcept {
+    return id == AdaptiveStrategyId::SmallObject ||
+           id == AdaptiveStrategyId::MediumObject ||
+           id == AdaptiveStrategyId::LargeObject;
+}
+
+static bool header_is_plausible(AdaptiveHeader* hdr, void* user) noexcept {
+    if (!hdr || hdr->magic != ADAPTIVE_MAGIC) return false;
+    if (!valid_strategy_id(hdr->strategy)) return false;
+    if (user_from_header(hdr) != user) return false;
+    if (hdr->usable < hdr->requested) return false;
+    if (hdr->flags & ADAPTIVE_FLAG_POOLED) {
+        return hdr->owner_page != nullptr && hdr->region_base == hdr->owner_page;
+    }
+    return hdr->region_base != nullptr && hdr->mapped_size >= ADAPTIVE_HDR_OFFSET;
+}
+
+static AdaptiveHeader* header_from_user_fast(void* ptr) noexcept {
+    if (!ptr) return nullptr;
+    if (!adaptive_page_maybe_owned(ptr)) return nullptr;
+    uintptr_t user = reinterpret_cast<uintptr_t>(ptr);
+    if (user < ADAPTIVE_HDR_OFFSET) return nullptr;
+    AdaptiveHeader* hdr = reinterpret_cast<AdaptiveHeader*>(user - ADAPTIVE_HDR_OFFSET);
+    return header_is_plausible(hdr, ptr) ? hdr : nullptr;
 }
 
 static void registry_insert(AdaptiveHeader* hdr) noexcept {
@@ -502,6 +599,12 @@ static void registry_remove(AdaptiveHeader* hdr) noexcept {
 }
 
 static AdaptiveHeader* registry_find(void* ptr) noexcept {
+    if (AdaptiveHeader* hdr = header_from_user_fast(ptr)) return hdr;
+    static bool debug_registry_lookup = []() noexcept {
+        const char* env = std::getenv("MY_MALLOC_ADAPTIVE_DEBUG_REGISTRY");
+        return adaptive_streq(env, "1") || adaptive_streq(env, "true");
+    }();
+    if (!debug_registry_lookup) return nullptr;
     std::lock_guard<std::mutex> lock(g_adaptive_registry_mutex);
     for (AdaptiveHeader* hdr = g_adaptive_registry_head; hdr; hdr = hdr->registry_next) {
         if (hdr->magic == ADAPTIVE_MAGIC && user_from_header(hdr) == ptr) {
@@ -570,7 +673,9 @@ static void record_pool_miss(AdaptiveStrategyId strategy) noexcept {
 
 static void adaptive_update_config(size_t small_page,
                                    size_t medium_span,
-                                   uint32_t local_batch) noexcept {
+                                   uint32_t local_batch,
+                                   uint32_t empty_cache_limit,
+                                   AdaptiveProfileId profile) noexcept {
     std::lock_guard<std::mutex> lock(g_adaptive_config_mutex);
     bool changed = false;
     small_page = adaptive_page_aligned(small_page);
@@ -587,10 +692,58 @@ static void adaptive_update_config(size_t small_page,
         g_config_local_batch_size.store(local_batch, std::memory_order_relaxed);
         changed = true;
     }
+    if (empty_cache_limit != g_config_empty_cache_limit.load(std::memory_order_relaxed)) {
+        g_config_empty_cache_limit.store(empty_cache_limit, std::memory_order_relaxed);
+        changed = true;
+    }
+    if (static_cast<uint8_t>(profile) != g_config_profile.load(std::memory_order_relaxed)) {
+        g_config_profile.store(static_cast<uint8_t>(profile), std::memory_order_relaxed);
+        changed = true;
+    }
     if (changed) {
         g_config_version.fetch_add(1, std::memory_order_relaxed);
         g_adaptive_stats.parameter_decisions.fetch_add(1, std::memory_order_relaxed);
     }
+}
+
+static AdaptiveWindowSnapshot adaptive_window_delta_locked() noexcept {
+    AdaptiveWindowSnapshot delta{};
+    uint64_t malloc_calls = g_adaptive_stats.malloc_calls.load(std::memory_order_relaxed);
+    uint64_t free_calls = g_adaptive_stats.free_calls.load(std::memory_order_relaxed);
+    uint64_t realloc_calls = g_adaptive_stats.realloc_calls.load(std::memory_order_relaxed);
+    uint64_t arch_switches = g_adaptive_stats.architecture_switches.load(std::memory_order_relaxed);
+    uint64_t param_decisions = g_adaptive_stats.parameter_decisions.load(std::memory_order_relaxed);
+    uint64_t failures = g_adaptive_stats.failure_count.load(std::memory_order_relaxed);
+
+    delta.alloc_calls = malloc_calls - g_last_window.malloc_calls;
+    delta.free_calls = free_calls - g_last_window.free_calls;
+    delta.realloc_calls = realloc_calls - g_last_window.realloc_calls;
+    delta.architecture_switches = arch_switches - g_last_window.architecture_switches;
+    delta.parameter_decisions = param_decisions - g_last_window.parameter_decisions;
+    delta.failure_count = failures - g_last_window.failure_count;
+
+    g_last_window.malloc_calls = malloc_calls;
+    g_last_window.free_calls = free_calls;
+    g_last_window.realloc_calls = realloc_calls;
+    g_last_window.architecture_switches = arch_switches;
+    g_last_window.parameter_decisions = param_decisions;
+    g_last_window.failure_count = failures;
+
+    for (size_t i = 0; i < AdaptiveStats::NUM_STRATEGIES; ++i) {
+        uint64_t allocs = g_adaptive_stats.strategy[i].alloc_count.load(std::memory_order_relaxed);
+        uint64_t hits = g_adaptive_stats.strategy[i].pool_hits.load(std::memory_order_relaxed);
+        uint64_t misses = g_adaptive_stats.strategy[i].pool_misses.load(std::memory_order_relaxed);
+        delta.strategy_allocs[i] = allocs - g_last_window.strategy_allocs[i];
+        delta.pool_hits[i] = hits - g_last_window.pool_hits[i];
+        delta.pool_misses[i] = misses - g_last_window.pool_misses[i];
+        g_last_window.strategy_allocs[i] = allocs;
+        g_last_window.pool_hits[i] = hits;
+        g_last_window.pool_misses[i] = misses;
+    }
+
+    delta.live_bytes = g_adaptive_stats.live_bytes.load(std::memory_order_relaxed);
+    delta.mapped_bytes = g_adaptive_stats.mapped_bytes.load(std::memory_order_relaxed);
+    return delta;
 }
 
 static void adaptive_tune_parameters_if_needed() noexcept {
@@ -604,20 +757,23 @@ static void adaptive_tune_parameters_if_needed() noexcept {
         return;
     }
 
-    int64_t live = g_adaptive_stats.live_bytes.load(std::memory_order_relaxed);
-    int64_t mapped = g_adaptive_stats.mapped_bytes.load(std::memory_order_relaxed);
-    uint64_t small_hits = g_adaptive_stats.strategy[strategy_index(AdaptiveStrategyId::SmallObject)]
-        .pool_hits.load(std::memory_order_relaxed);
-    uint64_t small_misses = g_adaptive_stats.strategy[strategy_index(AdaptiveStrategyId::SmallObject)]
-        .pool_misses.load(std::memory_order_relaxed);
-    uint64_t medium_hits = g_adaptive_stats.strategy[strategy_index(AdaptiveStrategyId::MediumObject)]
-        .pool_hits.load(std::memory_order_relaxed);
-    uint64_t medium_misses = g_adaptive_stats.strategy[strategy_index(AdaptiveStrategyId::MediumObject)]
-        .pool_misses.load(std::memory_order_relaxed);
+    AdaptiveWindowSnapshot window{};
+    {
+        std::lock_guard<std::mutex> lock(g_window_mutex);
+        window = adaptive_window_delta_locked();
+    }
+    int64_t live = window.live_bytes;
+    int64_t mapped = window.mapped_bytes;
+    uint64_t small_hits = window.pool_hits[strategy_index(AdaptiveStrategyId::SmallObject)];
+    uint64_t small_misses = window.pool_misses[strategy_index(AdaptiveStrategyId::SmallObject)];
+    uint64_t medium_hits = window.pool_hits[strategy_index(AdaptiveStrategyId::MediumObject)];
+    uint64_t medium_misses = window.pool_misses[strategy_index(AdaptiveStrategyId::MediumObject)];
 
     size_t next_small = cfg.small_page_size;
     size_t next_medium = cfg.medium_span_size;
     uint32_t next_batch = cfg.local_batch_size;
+    uint32_t next_empty_keep = cfg.empty_cache_limit;
+    AdaptiveProfileId next_profile = cfg.profile;
 
     if (g_adaptive_parameter_policy == AdaptiveParameterPolicy::Heuristic) {
         bool high_pressure = live > 0 && mapped > live * 3;
@@ -627,10 +783,18 @@ static void adaptive_tune_parameters_if_needed() noexcept {
             if (next_small > 32 * 1024) next_small /= 2;
             if (next_medium > 128 * 1024) next_medium /= 2;
             if (next_batch > 8) next_batch /= 2;
+            next_empty_keep = 0;
+            next_profile = AdaptiveProfileId::LowRss;
         } else {
             if (small_miss_heavy && next_small < 256 * 1024) next_small *= 2;
             if (medium_miss_heavy && next_medium < 1024 * 1024) next_medium *= 2;
             if ((small_miss_heavy || medium_miss_heavy) && next_batch < 256) next_batch *= 2;
+            if (small_miss_heavy || medium_miss_heavy) {
+                next_empty_keep = 4;
+                next_profile = AdaptiveProfileId::LowLatency;
+            } else {
+                next_profile = AdaptiveProfileId::Balanced;
+            }
         }
     } else if (g_adaptive_parameter_policy == AdaptiveParameterPolicy::CoordinateBandit) {
         static constexpr size_t small_candidates[] = {32 * 1024, 64 * 1024, 128 * 1024, 256 * 1024};
@@ -650,7 +814,7 @@ static void adaptive_tune_parameters_if_needed() noexcept {
         }
     }
 
-    adaptive_update_config(next_small, next_medium, next_batch);
+    adaptive_update_config(next_small, next_medium, next_batch, next_empty_keep, next_profile);
 }
 
 // --- Core mmap allocation (shared by all v1 strategies) --------------------
@@ -665,6 +829,70 @@ static bool round_usable(size_t size, size_t& usable_out) noexcept {
 
 static size_t align_up(size_t value, size_t alignment) noexcept {
     return (value + alignment - 1) & ~(alignment - 1);
+}
+
+static uintptr_t page_key(uintptr_t addr) noexcept {
+    return addr & ~uintptr_t(4095);
+}
+
+static size_t page_table_index(uintptr_t page) noexcept {
+    return (page >> 12) & (ADAPTIVE_PAGE_TABLE_SIZE - 1);
+}
+
+static void register_adaptive_region(void* base, size_t size) noexcept {
+    if (!base || size == 0) return;
+    uintptr_t begin = page_key(reinterpret_cast<uintptr_t>(base));
+    uintptr_t end = page_key(reinterpret_cast<uintptr_t>(base) + size - 1);
+    for (uintptr_t page = begin; page <= end; page += 4096) {
+        size_t idx = page_table_index(page);
+        for (size_t probe = 0; probe < ADAPTIVE_PAGE_TABLE_PROBE; ++probe) {
+            std::atomic<uintptr_t>& slot = g_adaptive_page_table[(idx + probe) & (ADAPTIVE_PAGE_TABLE_SIZE - 1)];
+            uintptr_t expected = 0;
+            if (slot.compare_exchange_strong(expected, page, std::memory_order_relaxed) ||
+                expected == page) {
+                break;
+            }
+            if (expected == ADAPTIVE_PAGE_TOMBSTONE) {
+                expected = ADAPTIVE_PAGE_TOMBSTONE;
+                if (slot.compare_exchange_strong(expected, page, std::memory_order_relaxed)) {
+                    break;
+                }
+            }
+        }
+        if (page > static_cast<uintptr_t>(-1) - 4096) break;
+    }
+}
+
+static void unregister_adaptive_region(void* base, size_t size) noexcept {
+    if (!base || size == 0) return;
+    uintptr_t begin = page_key(reinterpret_cast<uintptr_t>(base));
+    uintptr_t end = page_key(reinterpret_cast<uintptr_t>(base) + size - 1);
+    for (uintptr_t page = begin; page <= end; page += 4096) {
+        size_t idx = page_table_index(page);
+        for (size_t probe = 0; probe < ADAPTIVE_PAGE_TABLE_PROBE; ++probe) {
+            std::atomic<uintptr_t>& slot = g_adaptive_page_table[(idx + probe) & (ADAPTIVE_PAGE_TABLE_SIZE - 1)];
+            uintptr_t value = slot.load(std::memory_order_relaxed);
+            if (value == page) {
+                slot.store(ADAPTIVE_PAGE_TOMBSTONE, std::memory_order_relaxed);
+                break;
+            }
+            if (value == 0) break;
+        }
+        if (page > static_cast<uintptr_t>(-1) - 4096) break;
+    }
+}
+
+static bool adaptive_page_maybe_owned(void* ptr) noexcept {
+    if (!ptr) return false;
+    uintptr_t page = page_key(reinterpret_cast<uintptr_t>(ptr));
+    size_t idx = page_table_index(page);
+    for (size_t probe = 0; probe < ADAPTIVE_PAGE_TABLE_PROBE; ++probe) {
+        uintptr_t value = g_adaptive_page_table[(idx + probe) & (ADAPTIVE_PAGE_TABLE_SIZE - 1)]
+            .load(std::memory_order_relaxed);
+        if (value == page) return true;
+        if (value == 0) return false;
+    }
+    return false;
 }
 
 static bool small_class(size_t size, size_t& class_index, size_t& usable) noexcept {
@@ -703,6 +931,7 @@ static AdaptivePage* create_pool_page(AdaptiveStrategyId strategy,
     void* region = mmap(nullptr, mapped_size, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (region == MAP_FAILED) return nullptr;
+    register_adaptive_region(region, mapped_size);
 
     AdaptivePage* page = static_cast<AdaptivePage*>(region);
     page->strategy = strategy;
@@ -749,6 +978,69 @@ static AdaptivePage** pool_head_for(AdaptiveStrategyId strategy, size_t class_in
     return nullptr;
 }
 
+static std::mutex* pool_mutex_for(AdaptiveStrategyId strategy, size_t class_index) noexcept {
+    if (strategy == AdaptiveStrategyId::SmallObject) {
+        return class_index < ADAPTIVE_SMALL_CLASS_COUNT ? &g_small_class_mutexes[class_index] : nullptr;
+    }
+    if (strategy == AdaptiveStrategyId::MediumObject) {
+        return class_index < ADAPTIVE_MEDIUM_CLASS_COUNT ? &g_medium_class_mutexes[class_index] : nullptr;
+    }
+    return nullptr;
+}
+
+static uint32_t count_empty_pages_locked(AdaptivePage* head) noexcept {
+    uint32_t count = 0;
+    for (AdaptivePage* page = head; page; page = page->next) {
+        if (page->live_count == 0) count++;
+    }
+    return count;
+}
+
+static void release_page_locked(AdaptivePage** head,
+                                AdaptivePage* target,
+                                AdaptivePage* prev) noexcept {
+    if (!head || !target || target->live_count != 0) return;
+    if (prev) {
+        prev->next = target->next;
+    } else {
+        *head = target->next;
+    }
+    size_t mapped = target->mapped_size;
+    AdaptiveStrategyId strategy = target->strategy;
+    record_unmapped_bytes(mapped);
+    g_adaptive_stats.release_unmapped_bytes.fetch_add(mapped, std::memory_order_relaxed);
+    if (strategy == AdaptiveStrategyId::SmallObject) {
+        g_adaptive_stats.released_pages.fetch_add(1, std::memory_order_relaxed);
+    } else if (strategy == AdaptiveStrategyId::MediumObject) {
+        g_adaptive_stats.released_spans.fetch_add(1, std::memory_order_relaxed);
+    }
+    unregister_adaptive_region(target, mapped);
+    munmap(target, mapped);
+}
+
+static void release_empty_pages_if_needed_locked(AdaptiveStrategyId strategy,
+                                                 AdaptivePage** head,
+                                                 uint32_t keep_limit) noexcept {
+    if (!head) return;
+    uint32_t empty = count_empty_pages_locked(*head);
+    if (strategy == AdaptiveStrategyId::SmallObject) {
+        g_adaptive_stats.empty_pages.store(empty, std::memory_order_relaxed);
+    } else if (strategy == AdaptiveStrategyId::MediumObject) {
+        g_adaptive_stats.empty_spans.store(empty, std::memory_order_relaxed);
+    }
+    while (empty > keep_limit) {
+        AdaptivePage* prev = nullptr;
+        AdaptivePage* page = *head;
+        while (page && page->live_count != 0) {
+            prev = page;
+            page = page->next;
+        }
+        if (!page) break;
+        release_page_locked(head, page, prev);
+        empty--;
+    }
+}
+
 static void* adaptive_pool_alloc(size_t size, AdaptiveStrategyId strategy) noexcept {
     size_t class_index = 0;
     size_t usable = 0;
@@ -766,9 +1058,10 @@ static void* adaptive_pool_alloc(size_t size, AdaptiveStrategyId strategy) noexc
 
     AdaptiveHeader* hdr = nullptr;
     {
-        std::lock_guard<std::mutex> lock(g_adaptive_pool_mutex);
         AdaptivePage** head = pool_head_for(strategy, class_index);
-        if (!head) return nullptr;
+        std::mutex* mutex = pool_mutex_for(strategy, class_index);
+        if (!head || !mutex) return nullptr;
+        std::lock_guard<std::mutex> lock(*mutex);
 
         AdaptivePage* page = *head;
         while (page && !page->free_list) {
@@ -811,9 +1104,15 @@ static void adaptive_pool_free(AdaptiveHeader* hdr) noexcept {
     registry_remove(hdr);
     record_free_stats(hdr);
 
-    std::lock_guard<std::mutex> lock(g_adaptive_pool_mutex);
     AdaptivePage* page = hdr->owner_page;
     if (!page) return;
+    AdaptiveStrategyId strategy = page->strategy;
+    size_t class_index = page->class_index;
+    AdaptivePage** head = pool_head_for(strategy, class_index);
+    std::mutex* mutex = pool_mutex_for(strategy, class_index);
+    if (!head || !mutex) return;
+    AdaptiveRuntimeConfig cfg = adaptive_runtime_config();
+    std::lock_guard<std::mutex> lock(*mutex);
     hdr->magic = 0;
     hdr->requested = 0;
     hdr->registry_prev = nullptr;
@@ -822,6 +1121,7 @@ static void adaptive_pool_free(AdaptiveHeader* hdr) noexcept {
     if (page->live_count > 0) {
         page->live_count--;
     }
+    release_empty_pages_if_needed_locked(strategy, head, cfg.empty_cache_limit);
 }
 
 static void* adaptive_mmap_alloc(size_t size, AdaptiveStrategyId strategy) noexcept {
@@ -836,6 +1136,7 @@ static void* adaptive_mmap_alloc(size_t size, AdaptiveStrategyId strategy) noexc
     void* region = mmap(nullptr, mapped, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (region == MAP_FAILED) return nullptr;
+    register_adaptive_region(region, mapped);
 
     AdaptiveHeader* hdr = static_cast<AdaptiveHeader*>(region);
     hdr->magic       = ADAPTIVE_MAGIC;
@@ -863,6 +1164,7 @@ static void adaptive_mmap_free(AdaptiveHeader* hdr) noexcept {
     void* base = hdr->region_base;
     size_t mapped = hdr->mapped_size;
     record_unmapped_bytes(mapped);
+    unregister_adaptive_region(base, mapped);
     munmap(base, mapped);
 }
 
@@ -1011,6 +1313,7 @@ void* adaptive_memalign(size_t alignment, size_t size) noexcept {
         record_policy_result(strategy, false, monotonic_time_ns() - start_ns);
         return nullptr;
     }
+    register_adaptive_region(region, mapped);
 
     // Find aligned user pointer
     uintptr_t base_user = reinterpret_cast<uintptr_t>(region) + ADAPTIVE_HDR_OFFSET;
@@ -1057,6 +1360,11 @@ AdaptiveStatsSnapshot adaptive_stats_snapshot() noexcept {
     s.policy_decisions = g_adaptive_stats.policy_decisions.load(std::memory_order_relaxed);
     s.architecture_switches = g_adaptive_stats.architecture_switches.load(std::memory_order_relaxed);
     s.parameter_decisions = g_adaptive_stats.parameter_decisions.load(std::memory_order_relaxed);
+    s.empty_pages = g_adaptive_stats.empty_pages.load(std::memory_order_relaxed);
+    s.empty_spans = g_adaptive_stats.empty_spans.load(std::memory_order_relaxed);
+    s.released_pages = g_adaptive_stats.released_pages.load(std::memory_order_relaxed);
+    s.released_spans = g_adaptive_stats.released_spans.load(std::memory_order_relaxed);
+    s.release_unmapped_bytes = g_adaptive_stats.release_unmapped_bytes.load(std::memory_order_relaxed);
 
     for (size_t i = 0; i < AdaptiveStats::NUM_STRATEGIES; ++i) {
         s.strategy[i].alloc_count     = g_adaptive_stats.strategy[i].alloc_count.load(std::memory_order_relaxed);
@@ -1073,6 +1381,9 @@ AdaptiveStatsSnapshot adaptive_stats_snapshot() noexcept {
 
     s.live_bytes   = g_adaptive_stats.live_bytes.load(std::memory_order_relaxed);
     s.mapped_bytes = g_adaptive_stats.mapped_bytes.load(std::memory_order_relaxed);
+    s.mapped_live_ratio = s.live_bytes > 0
+        ? static_cast<double>(s.mapped_bytes) / static_cast<double>(s.live_bytes)
+        : 0.0;
     return s;
 }
 
@@ -1084,6 +1395,11 @@ void adaptive_stats_reset() noexcept {
     g_adaptive_stats.policy_decisions.store(0, std::memory_order_relaxed);
     g_adaptive_stats.architecture_switches.store(0, std::memory_order_relaxed);
     g_adaptive_stats.parameter_decisions.store(0, std::memory_order_relaxed);
+    g_adaptive_stats.empty_pages.store(0, std::memory_order_relaxed);
+    g_adaptive_stats.empty_spans.store(0, std::memory_order_relaxed);
+    g_adaptive_stats.released_pages.store(0, std::memory_order_relaxed);
+    g_adaptive_stats.released_spans.store(0, std::memory_order_relaxed);
+    g_adaptive_stats.release_unmapped_bytes.store(0, std::memory_order_relaxed);
     for (size_t i = 0; i < AdaptiveStats::NUM_STRATEGIES; ++i) {
         g_adaptive_stats.strategy[i].alloc_count.store(0, std::memory_order_relaxed);
         g_adaptive_stats.strategy[i].free_count.store(0, std::memory_order_relaxed);
@@ -1101,6 +1417,11 @@ void adaptive_stats_reset() noexcept {
     g_param_counter.store(0, std::memory_order_relaxed);
     for (size_t i = 0; i < 3; ++i) {
         g_arch_band_counters[i].store(0, std::memory_order_relaxed);
+        g_arch_band_cooldown_until[i].store(0, std::memory_order_relaxed);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_window_mutex);
+        g_last_window = AdaptiveWindowBase{};
     }
 }
 
@@ -1152,7 +1473,31 @@ AdaptiveConfigSnapshot adaptive_config_snapshot() noexcept {
     s.architecture_window = cfg.architecture_window;
     s.parameter_window = cfg.parameter_window;
     s.local_batch_size = cfg.local_batch_size;
+    s.empty_cache_limit = cfg.empty_cache_limit;
+    s.cooldown_windows = cfg.cooldown_windows;
+    s.profile = cfg.profile;
     return s;
+}
+
+AdaptiveWindowSnapshot adaptive_window_snapshot() noexcept {
+    std::lock_guard<std::mutex> lock(g_window_mutex);
+    return adaptive_window_delta_locked();
+}
+
+const char* adaptive_profile_name(AdaptiveProfileId p) noexcept {
+    switch (p) {
+        case AdaptiveProfileId::Balanced:
+            return "balanced";
+        case AdaptiveProfileId::LowLatency:
+            return "low_latency";
+        case AdaptiveProfileId::LowRss:
+            return "low_rss";
+        case AdaptiveProfileId::LargeHeavy:
+            return "large_heavy";
+        case AdaptiveProfileId::CrossThread:
+            return "cross_thread";
+    }
+    return "unknown";
 }
 
 } // namespace my_ptmalloc

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <pthread.h>
 
 namespace my_ptmalloc {
 
@@ -32,7 +33,8 @@ struct AllocStatsAtomic {
 };
 
 AllocMode g_mode = AllocMode::Hybrid;
-bool g_lab_initialized = false;
+bool g_mode_forced = false;
+pthread_once_t g_lab_once = PTHREAD_ONCE_INIT;
 AllocStatsAtomic g_stats;
 std::atomic<uint64_t> g_trace_seq{0};
 AllocTraceEvent g_trace_ring[TRACE_RING_SIZE]{};
@@ -46,12 +48,12 @@ AllocTraceEvent g_trace_ring[TRACE_RING_SIZE]{};
 bool g_allocator_stats_enabled = false;
 bool g_allocator_trace_enabled = false;
 
-void allocator_lab_init() noexcept {
-    if (g_lab_initialized) return;
-    g_lab_initialized = true;
-
+void allocator_lab_init_once() noexcept {
     const char* mode = std::getenv("MY_MALLOC_MODE");
-    if (env_equals(mode, "ptmalloc")) {
+    if (g_mode_forced) {
+        // Strategy tools can force mode without calling setenv/putenv, because
+        // environment mutation can allocate and recursively initialize malloc.
+    } else if (env_equals(mode, "ptmalloc")) {
         g_mode = AllocMode::PtmallocOnly;
     } else if (env_equals(mode, "tcmalloc") || env_equals(mode, "tcmalloc_like")) {
         g_mode = AllocMode::TcmallocLike;
@@ -73,6 +75,15 @@ void allocator_lab_init() noexcept {
     const char* stats = std::getenv("MY_MALLOC_STATS");
     g_allocator_stats_enabled = g_allocator_trace_enabled ||
                                 env_equals(stats, "1") || env_equals(stats, "true");
+}
+
+void allocator_lab_init() noexcept {
+    pthread_once(&g_lab_once, allocator_lab_init_once);
+}
+
+void allocator_lab_force_mode(AllocMode mode) noexcept {
+    g_mode = mode;
+    g_mode_forced = true;
 }
 
 AllocMode allocator_mode() noexcept {

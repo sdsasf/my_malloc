@@ -9,6 +9,7 @@
 #include "my_ptmalloc/runtime_allocator.h"
 #include "my_ptmalloc/allocator_lab.h"
 #include "my_ptmalloc/adaptive_allocator.h"
+#include <cerrno>
 #include <cstring>
 #include <new>
 
@@ -28,6 +29,7 @@ void* my_calloc(size_t n, size_t size) noexcept {
 }
 
 void* my_memalign(size_t alignment, size_t size) noexcept {
+    if (alignment == 0) return nullptr;
     // Alignment must be power of 2 and >= sizeof(void*)
     if (alignment < sizeof(void*)) alignment = sizeof(void*);
     if (alignment & (alignment - 1)) {
@@ -40,6 +42,7 @@ void* my_memalign(size_t alignment, size_t size) noexcept {
         alignment |= alignment >> 16;
         alignment |= alignment >> 32;
         alignment++;
+        if (alignment == 0) return nullptr;
     }
 
     // Ensure alignment >= MALLOC_ALIGNMENT so chunk headers are always aligned
@@ -66,6 +69,9 @@ void* my_memalign(size_t alignment, size_t size) noexcept {
     // We need room for: nb usable bytes + up to (alignment - MALLOC_ALIGNMENT)
     // bytes of shift to reach alignment + alignment extra for fallback to the
     // NEXT alignment boundary when the first one yields a too-small front piece.
+    if (alignment > (static_cast<size_t>(-1) - nb - CHUNK_HDR_SZ) / 2) {
+        return nullptr;
+    }
     size_t alloc_size = nb + 2 * alignment + CHUNK_HDR_SZ;
     void* raw = my_malloc(alloc_size);
     if (!raw) return nullptr;
@@ -130,6 +136,8 @@ int my_posix_memalign(void** memptr, size_t alignment, size_t size) noexcept {
 
 void* my_aligned_alloc(size_t alignment, size_t size) noexcept {
     // aligned_alloc requires size to be a multiple of alignment
+    if (alignment == 0) return nullptr;
+    if (alignment & (alignment - 1)) return nullptr;
     if (size % alignment != 0) return nullptr;
     return my_memalign(alignment, size);
 }

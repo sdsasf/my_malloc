@@ -116,6 +116,7 @@ Examples:
 | `--batch N` | Batch size |
 | `--rounds N` | Number of batch rounds |
 | `--threads N` | Number of worker threads |
+| `--repeats N` | Repeat each benchmark and output aggregate statistics |
 | `--seed N` | Deterministic random seed |
 | `--json` | Emit JSON lines |
 
@@ -130,6 +131,9 @@ Adaptive-specific runtime parameters can be set through the environment when `--
 | `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` | Initial small-object page size. |
 | `MY_MALLOC_ADAPTIVE_MEDIUM_SPAN_SIZE` | Initial medium-object span size. |
 | `MY_MALLOC_ADAPTIVE_LOCAL_BATCH` | Batch-size hint for future local-cache work. |
+| `MY_MALLOC_ADAPTIVE_EMPTY_CACHE_LIMIT` | Empty page/span keep count before release. |
+| `MY_MALLOC_ADAPTIVE_COOLDOWN_WINDOWS` | Cooldown after architecture/profile switches. |
+| `MY_MALLOC_ADAPTIVE_PROFILE` | Initial profile: `balanced`, `low_latency`, `low_rss`, `large_heavy`, `cross_thread`. |
 
 Examples:
 
@@ -140,6 +144,9 @@ MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=heuristic \
 MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=static \
   MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE=32768 \
   ./build/bench_runner --strategy adaptive --bench same_size --size 64
+
+./build/bench_runner --strategy adaptive --bench phase_changing --json
+./build/bench_runner --strategy adaptive --bench same_size_64 --repeats 5 --json
 ```
 
 JSON example:
@@ -149,8 +156,10 @@ JSON example:
 ```
 
 ```json
-{"strategy":"hybrid","benchmark":"same_size_64","ops_per_sec":44943821,"ms":0.222,"peak_rss_kb":15872}
+{"strategy":"adaptive","benchmark":"same_size_64","ops_per_sec":24430358,"ms":40.933,"peak_rss_kb":31104,"adaptive":{"architecture_switches":0,"parameter_decisions":0,"config_version":1,"profile":"balanced","mapped_bytes":0,"live_bytes":0,"mapped_live_ratio":0.000,"empty_pages":0,"empty_spans":0,"released_pages":0,"released_spans":0,"release_unmapped_bytes":0,"strategy_allocs":[1000,0,0],"strategy_frees":[1000,0,0],"pool_hits":[999,0,0],"pool_misses":[1,0,0]}}
 ```
+
+When `--repeats N` is greater than 1, JSON output reports aggregate `mean`, `median`, `p95`, `stddev`, `min`, and `max` operation rates instead of relying on a single sample.
 
 ## 7. External Benchmark Script
 
@@ -435,7 +444,7 @@ Interpretation:
 - `hybrid` and `ptmalloc` are strongest in this micro matrix on fixed-size and batch workloads.
 - `jemalloc_like` leads the stress fragmentation sample, which matches its arena/run organization goal in this simplified benchmark.
 - `tcmalloc_like` leads the stress cross-thread sample in this run, while `mimalloc_like` is not yet showing its expected remote-free advantage. That points to tuning gaps in the simplified mimalloc-like page/remote-free model or in the benchmark shape.
-- `adaptive` is competitive in some stress cases but still pays overhead from policy/telemetry, ownership registry, simple locked pools, and no page/span release.
+- `adaptive` is competitive in some stress cases but still pays overhead from policy/telemetry, the page ownership filter, per-class locking, and conservative page/span release.
 - Among adaptive policies, `ucb1` is a strong telemetry-driven baseline on micro batch/random and stress random/fragmentation in this run. `epsilon_greedy` leads adaptive stress cross-thread. `thompson_sampling` is currently less stable and should be treated as a baseline, not a tuned model.
 
 External `mimalloc-bench glibc-simple` was also run through LD_PRELOAD for all modes:

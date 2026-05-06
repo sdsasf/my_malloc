@@ -57,10 +57,12 @@ The header stores:
 
 `adaptive_free(ptr)` always uses allocation-time metadata. It does not ask the current architecture policy where the pointer should go. This is what makes soft switching possible: new allocations can use a new architecture/configuration while old allocations still free through the metadata they were created with.
 
+The hot ownership path now uses a page-level adaptive ownership table before reading the header. This prevents non-adaptive pointers from causing unsafe `ptr - header` reads. The intrusive registry is kept as a debug/validation fallback when `MY_MALLOC_ADAPTIVE_DEBUG_REGISTRY=1`.
+
 ```mermaid
 flowchart LR
     Free["adaptive_free(ptr)"]
-    Lookup["ownership registry lookup"]
+    Lookup["page ownership filter"]
     Header["AdaptiveHeader"]
     Pooled{"pooled?"}
     Pool["return to page/span free list"]
@@ -90,8 +92,13 @@ Current defaults:
 | Architecture decision window | `4096` allocations per size band | `MY_MALLOC_ADAPTIVE_ARCH_WINDOW` |
 | Parameter tuning window | `8192` allocations | `MY_MALLOC_ADAPTIVE_PARAM_WINDOW` |
 | Local batch hint | `32` | `MY_MALLOC_ADAPTIVE_LOCAL_BATCH` |
+| Empty page/span keep limit | `2` | `MY_MALLOC_ADAPTIVE_EMPTY_CACHE_LIMIT` |
+| Switch cooldown windows | `2` | `MY_MALLOC_ADAPTIVE_COOLDOWN_WINDOWS` |
+| Starting profile | `balanced` | `MY_MALLOC_ADAPTIVE_PROFILE` |
 
 The current code already versions the runtime config. New pages/spans record the active config version; old pages/spans keep their original mapped size and free path.
+
+Small and medium pools now use per-size-class locks instead of one global pool lock. Empty pages/spans can be released conservatively when the empty cache for a class exceeds the active profile/config limit.
 
 ## 4. Two-Layer Adaptation
 
@@ -151,11 +158,29 @@ Adaptive records lightweight relaxed-atomic metrics:
 - policy trials, successes, and failures;
 - EWMA allocation latency;
 - pool hits and misses;
-- live bytes and mapped bytes.
+- empty page/span counts;
+- released page/span counts and release-unmapped bytes;
+- live bytes, mapped bytes, and mapped/live ratio.
 
 These metrics are adaptive-internal. They are separate from the teaching allocator lab metrics.
 
-## 6. Soft Switching
+Policy updates use window deltas rather than only global lifetime counters. The hot path records relaxed counters and reads an atomic config snapshot; full architecture/parameter updates run at window boundaries.
+
+## 6. Profiles
+
+The control plane has an initial profile concept above the raw small/medium/large architecture ids:
+
+| Profile | Semantics |
+|---|---|
+| `balanced` | Conservative default behavior. |
+| `low_latency` | Prefer reuse and keep more empty pages/spans cached. |
+| `low_rss` | Prefer more aggressive empty page/span release. |
+| `large_heavy` | Bias size-compatible decisions toward the large/direct path. |
+| `cross_thread` | Reserved control state for future owner-aware remote-free work. |
+
+Profiles currently affect release aggressiveness and architecture preference. They are not yet a full profile-specific parameter schema.
+
+## 7. Soft Switching
 
 Soft switching means the allocator changes only the decision used for future allocations:
 
@@ -177,7 +202,7 @@ sequenceDiagram
 
 This avoids a hard migration step. The tradeoff is that old pages/spans may keep older parameter choices alive until their objects are freed.
 
-## 7. Extension Plan
+## 8. Extension Plan
 
 Future internal architectures should be registered as profiles rather than hard-coded in a policy switch. A full registry should expose:
 
@@ -205,20 +230,20 @@ ParamDescriptor {
 
 The current code implements the first step of that design: versioned runtime config, separate architecture and parameter policy, and env-configurable parameters. It does not yet expose a general plugin-style adaptive architecture registry.
 
-## 8. Simplifications
+## 9. Simplifications
 
 Current simplifications are deliberate:
 
-- ownership registry is correctness-oriented and uses a global mutex;
-- page/span pools use a global mutex;
-- empty pages/spans are cached, not released to the OS;
+- ownership fast path uses a fixed page table; the registry remains a debug fallback with a global mutex;
+- page/span pools use per-size-class locks, not thread-local caches yet;
+- empty pages/spans are released with a conservative threshold, not a production decay/purge policy;
 - small classes use uniform 16B spacing;
 - medium classes use uniform 1KiB spacing;
 - aligned allocations use direct mmap;
 - `local_batch_size` is currently a tunable hint for future local-cache work, not a full per-thread cache implementation;
 - `bayesian_offline` does not run an optimizer inside the allocator; it represents the mode where env/config values come from an offline tuning run.
 
-## 9. Commands
+## 10. Commands
 
 ```bash
 ./build/allocator_validate --strategy adaptive

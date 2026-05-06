@@ -123,8 +123,8 @@ Every allocator family must be able to identify its own pointers on `free`, `rea
 
 | Pointer owner | Identification method | Free/realloc handler |
 |---|---|---|
-| Adaptive pooled small/medium object | `AdaptiveHeader` ownership registry and `owner_page` pointer | Return to adaptive page/span free list |
-| Adaptive large/aligned object | `AdaptiveHeader` ownership registry and mmap metadata | Adaptive direct `munmap` path |
+| Adaptive pooled small/medium object | Page ownership filter, `AdaptiveHeader`, and `owner_page` pointer | Return to adaptive page/span free list, with conservative empty release |
+| Adaptive large/aligned object | Page ownership filter, `AdaptiveHeader`, and mmap metadata | Adaptive direct `munmap` path |
 | Teaching family page object | 64KB page table in `family_allocators.cpp` | tcmalloc/jemalloc/mimalloc-like handler |
 | Teaching family large block | large-pointer table in `family_allocators.cpp` | Family large free/realloc handler |
 | Hybrid slab object | 64KB slab lookup in `slab_allocator.cpp` | Slab free/realloc path |
@@ -167,7 +167,7 @@ flowchart TB
     Medium["MediumObject architecture<br/>1KiB classes"]
     Large["LargeObjectStrategy<br/>direct mmap"]
     Header["AdaptiveHeader<br/>strategy + config_version + page/span"]
-    Registry["ownership registry"]
+    Registry["page ownership filter<br/>debug registry fallback"]
     User["user pointer"]
 
     Req --> ArchPolicy

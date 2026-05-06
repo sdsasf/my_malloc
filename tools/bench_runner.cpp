@@ -1,9 +1,11 @@
 #include "strategy_loader.h"
+#include "my_ptmalloc/adaptive_allocator.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 #include <random>
 #include <string>
 #include <sys/resource.h>
@@ -38,7 +40,17 @@ struct BenchConfig {
     int batch = 512;
     int rounds = 1000;
     int threads = 4;
+    int repeats = 1;
     unsigned seed = 12345;
+};
+
+struct RepeatSummary {
+    double mean;
+    double median;
+    double p95;
+    double stddev;
+    double min;
+    double max;
 };
 
 static double now_ms() {
@@ -216,10 +228,109 @@ static BenchResult latency_sample_workload(const StrategyDescriptor& s,
     return {name, end - start, static_cast<size_t>(iters), peak_rss_kb()};
 }
 
+static BenchResult phase_changing_workload(const StrategyDescriptor& s,
+                                           int iters,
+                                           int slots,
+                                           unsigned seed) {
+    std::vector<void*> ptrs(static_cast<size_t>(slots), nullptr);
+    std::mt19937 rng(seed);
+    double start = now_ms();
+
+    for (int i = 0; i < iters; ++i) {
+        void* p = s.vtable.allocate(32 + static_cast<size_t>(i % 8) * 16);
+        touch_bytes(p, 64, 0x11);
+        s.vtable.deallocate(p);
+    }
+    std::uniform_int_distribution<size_t> medium_size(1024, 64 * 1024);
+    for (int i = 0; i < iters / 2; ++i) {
+        int idx = static_cast<int>(rng() % slots);
+        if (ptrs[idx]) s.vtable.deallocate(ptrs[idx]);
+        ptrs[idx] = s.vtable.allocate(medium_size(rng));
+        touch_bytes(ptrs[idx], 128, 0x22);
+    }
+    for (int i = 0; i < std::max(1, iters / 32); ++i) {
+        void* p = s.vtable.allocate(128 * 1024 + static_cast<size_t>(i % 8) * 64 * 1024);
+        touch_bytes(p, 256, 0x33);
+        s.vtable.deallocate(p);
+    }
+    for (int i = 0; i < slots; ++i) {
+        if (!ptrs[static_cast<size_t>(i)]) {
+            ptrs[static_cast<size_t>(i)] = s.vtable.allocate(256 + static_cast<size_t>(i % 64) * 16);
+        }
+    }
+    for (void* p : ptrs) if (p) s.vtable.deallocate(p);
+
+    double end = now_ms();
+    return {"phase_changing", end - start, static_cast<size_t>(iters * 2 + slots), peak_rss_kb()};
+}
+
+static RepeatSummary summarize(const std::vector<double>& values) {
+    std::vector<double> sorted = values;
+    std::sort(sorted.begin(), sorted.end());
+    double sum = 0.0;
+    for (double v : sorted) sum += v;
+    double mean = sorted.empty() ? 0.0 : sum / static_cast<double>(sorted.size());
+    double var = 0.0;
+    for (double v : sorted) {
+        double d = v - mean;
+        var += d * d;
+    }
+    if (!sorted.empty()) var /= static_cast<double>(sorted.size());
+    size_t p95_index = sorted.empty() ? 0 : std::min(sorted.size() - 1, sorted.size() * 95 / 100);
+    return RepeatSummary{
+        mean,
+        sorted.empty() ? 0.0 : sorted[sorted.size() / 2],
+        sorted.empty() ? 0.0 : sorted[p95_index],
+        std::sqrt(var),
+        sorted.empty() ? 0.0 : sorted.front(),
+        sorted.empty() ? 0.0 : sorted.back(),
+    };
+}
+
+static bool strategy_is_adaptive(const char* strategy) {
+    return std::strcmp(strategy, "adaptive") == 0;
+}
+
 static void print_json(const char* strategy, const BenchResult& r) {
     double ops = r.ops / (r.ms / 1000.0);
-    std::printf("{\"strategy\":\"%s\",\"benchmark\":\"%s\",\"ops_per_sec\":%.0f,\"ms\":%.3f,\"peak_rss_kb\":%zu}\n",
+    std::printf("{\"strategy\":\"%s\",\"benchmark\":\"%s\",\"ops_per_sec\":%.0f,\"ms\":%.3f,\"peak_rss_kb\":%zu",
                 strategy, r.name.c_str(), ops, r.ms, r.peak_rss_kb);
+    if (strategy_is_adaptive(strategy)) {
+        my_ptmalloc::AdaptiveStatsSnapshot s = my_ptmalloc::adaptive_stats_snapshot();
+        my_ptmalloc::AdaptiveConfigSnapshot c = my_ptmalloc::adaptive_config_snapshot();
+        std::printf(",\"adaptive\":{\"architecture_switches\":%llu,\"parameter_decisions\":%llu,"
+                    "\"config_version\":%u,\"profile\":\"%s\",\"mapped_bytes\":%lld,"
+                    "\"live_bytes\":%lld,\"mapped_live_ratio\":%.3f,"
+                    "\"empty_pages\":%llu,\"empty_spans\":%llu,\"released_pages\":%llu,"
+                    "\"released_spans\":%llu,\"release_unmapped_bytes\":%llu,"
+                    "\"strategy_allocs\":[%llu,%llu,%llu],\"strategy_frees\":[%llu,%llu,%llu],"
+                    "\"pool_hits\":[%llu,%llu,%llu],\"pool_misses\":[%llu,%llu,%llu]}",
+                    static_cast<unsigned long long>(s.architecture_switches),
+                    static_cast<unsigned long long>(s.parameter_decisions),
+                    c.version,
+                    my_ptmalloc::adaptive_profile_name(c.profile),
+                    static_cast<long long>(s.mapped_bytes),
+                    static_cast<long long>(s.live_bytes),
+                    s.mapped_live_ratio,
+                    static_cast<unsigned long long>(s.empty_pages),
+                    static_cast<unsigned long long>(s.empty_spans),
+                    static_cast<unsigned long long>(s.released_pages),
+                    static_cast<unsigned long long>(s.released_spans),
+                    static_cast<unsigned long long>(s.release_unmapped_bytes),
+                    static_cast<unsigned long long>(s.strategy[0].alloc_count),
+                    static_cast<unsigned long long>(s.strategy[1].alloc_count),
+                    static_cast<unsigned long long>(s.strategy[2].alloc_count),
+                    static_cast<unsigned long long>(s.strategy[0].free_count),
+                    static_cast<unsigned long long>(s.strategy[1].free_count),
+                    static_cast<unsigned long long>(s.strategy[2].free_count),
+                    static_cast<unsigned long long>(s.strategy[0].pool_hits),
+                    static_cast<unsigned long long>(s.strategy[1].pool_hits),
+                    static_cast<unsigned long long>(s.strategy[2].pool_hits),
+                    static_cast<unsigned long long>(s.strategy[0].pool_misses),
+                    static_cast<unsigned long long>(s.strategy[1].pool_misses),
+                    static_cast<unsigned long long>(s.strategy[2].pool_misses));
+    }
+    std::printf("}\n");
 }
 
 static void print_usage(const char* argv0) {
@@ -233,8 +344,10 @@ static void print_usage(const char* argv0) {
         "  --profile NAME        smoke, micro, stress, all (default: micro)\n"
         "  --bench NAME          add one benchmark; may be repeated\n"
         "                        same_size, same_size_64, same_size_256, batch, random,\n"
-        "                        fragmentation, cross_thread_free, latency_sample\n"
+        "                        fragmentation, cross_thread_free, latency_sample,\n"
+        "                        phase_changing\n"
         "  --json                print one JSON object per result\n"
+        "  --repeats N           repeat each benchmark and report aggregate stats\n"
         "  --iters N             iterations for same-size/fragmentation/latency tests\n"
         "  --random-iters N      iterations for random workload\n"
         "  --size N              size for same_size and latency_sample\n"
@@ -317,6 +430,9 @@ static bool parse_args(int argc, char** argv, BenchConfig& cfg) {
         } else if (std::strcmp(arg, "--threads") == 0) {
             const char* v = need_value(arg);
             if (!v || !parse_int_arg(v, cfg.threads)) return false;
+        } else if (std::strcmp(arg, "--repeats") == 0) {
+            const char* v = need_value(arg);
+            if (!v || !parse_int_arg(v, cfg.repeats)) return false;
         } else if (std::strcmp(arg, "--seed") == 0) {
             const char* v = need_value(arg);
             size_t parsed = 0;
@@ -343,7 +459,7 @@ static std::vector<std::string> profile_benches(const std::string& profile) {
     if (profile == "stress") return {"random", "fragmentation", "cross_thread_free"};
     if (profile == "all") {
         return {"same_size_64", "same_size_256", "same_size", "batch", "random",
-                "fragmentation", "cross_thread_free", "latency_sample"};
+                "fragmentation", "cross_thread_free", "latency_sample", "phase_changing"};
     }
     std::fprintf(stderr, "unknown profile '%s'\n", profile.c_str());
     return {};
@@ -385,6 +501,10 @@ static bool run_one(const StrategyDescriptor& s,
         out = latency_sample_workload(s, cfg.size, cfg.iters, 100);
         return true;
     }
+    if (name == "phase_changing") {
+        out = phase_changing_workload(s, cfg.iters, cfg.slots, cfg.seed);
+        return true;
+    }
     std::fprintf(stderr, "unknown benchmark '%s'\n", name.c_str());
     return false;
 }
@@ -408,23 +528,46 @@ int main(int argc, char** argv) {
 
     if (!cfg.json) {
         std::printf("=== strategy: %s ===\n", loaded.desc.name);
-        std::printf("profile=%s iters=%d random_iters=%d size=%zu range=%zu..%zu slots=%d batch=%d rounds=%d threads=%d seed=%u\n",
+        std::printf("profile=%s iters=%d random_iters=%d size=%zu range=%zu..%zu slots=%d batch=%d rounds=%d threads=%d repeats=%d seed=%u\n",
                     cfg.profile.c_str(), cfg.iters, cfg.random_iters, cfg.size, cfg.min_size,
-                    cfg.max_size, cfg.slots, cfg.batch, cfg.rounds, cfg.threads, cfg.seed);
+                    cfg.max_size, cfg.slots, cfg.batch, cfg.rounds, cfg.threads, cfg.repeats, cfg.seed);
     }
 
     for (const auto& bench : benches) {
-        BenchResult r;
-        if (!run_one(loaded.desc, cfg, bench, r)) {
-            unload_strategy(loaded);
-            return 2;
+        std::vector<double> ops_values;
+        BenchResult last;
+        for (int rep = 0; rep < cfg.repeats; ++rep) {
+            BenchResult r;
+            if (!run_one(loaded.desc, cfg, bench, r)) {
+                unload_strategy(loaded);
+                return 2;
+            }
+            last = r;
+            ops_values.push_back(r.ops / (r.ms / 1000.0));
+            if (cfg.json && cfg.repeats == 1) {
+                print_json(loaded.desc.name, r);
+            }
         }
-        if (cfg.json) {
-            print_json(loaded.desc.name, r);
-        } else {
-            double ops = r.ops / (r.ms / 1000.0);
+        if (cfg.repeats > 1) {
+            RepeatSummary summary = summarize(ops_values);
+            if (cfg.json) {
+                std::printf("{\"strategy\":\"%s\",\"benchmark\":\"%s\",\"repeats\":%d,"
+                            "\"ops_per_sec_mean\":%.0f,\"ops_per_sec_median\":%.0f,"
+                            "\"ops_per_sec_p95\":%.0f,\"ops_per_sec_stddev\":%.0f,"
+                            "\"ops_per_sec_min\":%.0f,\"ops_per_sec_max\":%.0f,"
+                            "\"last_ms\":%.3f,\"peak_rss_kb\":%zu}\n",
+                            loaded.desc.name, last.name.c_str(), cfg.repeats,
+                            summary.mean, summary.median, summary.p95, summary.stddev,
+                            summary.min, summary.max, last.ms, last.peak_rss_kb);
+            } else {
+                std::printf("  %-16s mean=%10.0f median=%10.0f p95=%10.0f stddev=%8.0f min=%10.0f max=%10.0f peak=%zuKB\n",
+                            last.name.c_str(), summary.mean, summary.median, summary.p95,
+                            summary.stddev, summary.min, summary.max, last.peak_rss_kb);
+            }
+        } else if (!cfg.json) {
+            double ops = ops_values.empty() ? 0.0 : ops_values.front();
             std::printf("  %-16s %10.0f ops/sec  %7.2f ms  peak=%zuKB\n",
-                        r.name.c_str(), ops, r.ms, r.peak_rss_kb);
+                        last.name.c_str(), ops, last.ms, last.peak_rss_kb);
         }
     }
 

@@ -60,6 +60,7 @@ struct AllocTraceEvent {
 };
 
 void allocator_lab_init() noexcept;
+void allocator_lab_force_mode(AllocMode mode) noexcept;
 [[nodiscard]] AllocMode allocator_mode() noexcept;
 [[nodiscard]] bool allocator_stats_enabled() noexcept;
 [[nodiscard]] bool allocator_trace_enabled() noexcept;

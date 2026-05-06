@@ -1,6 +1,8 @@
 #include "strategy_loader.h"
+#include "my_ptmalloc/my_malloc.h"
 
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <random>
@@ -98,6 +100,36 @@ static bool validate_random(const my_ptmalloc::StrategyDescriptor& s) {
     return true;
 }
 
+static bool validate_alignment_api(const my_ptmalloc::StrategyDescriptor& s) {
+    if (std::strcmp(s.name, "libc") == 0) return true;
+    void* p0 = my_ptmalloc::my_aligned_alloc(0, 64);
+    if (!check(p0 == nullptr, "aligned_alloc accepted alignment 0")) {
+        if (p0) my_ptmalloc::my_free(p0);
+        return false;
+    }
+    void* p1 = my_ptmalloc::my_aligned_alloc(24, 96);
+    if (!check(p1 == nullptr, "aligned_alloc accepted non-power-of-two alignment")) {
+        if (p1) my_ptmalloc::my_free(p1);
+        return false;
+    }
+    void* p2 = my_ptmalloc::my_aligned_alloc(64, 96);
+    if (!check(p2 == nullptr, "aligned_alloc accepted size not multiple of alignment")) {
+        if (p2) my_ptmalloc::my_free(p2);
+        return false;
+    }
+    void* p3 = my_ptmalloc::my_aligned_alloc(64, 128);
+    if (!check(p3 != nullptr, "aligned_alloc valid request failed")) return false;
+    bool aligned = (reinterpret_cast<uintptr_t>(p3) & (64 - 1)) == 0;
+    my_ptmalloc::my_free(p3);
+    if (!check(aligned, "aligned_alloc returned misaligned pointer")) return false;
+
+    void* p4 = my_ptmalloc::my_memalign(128, 256);
+    if (!check(p4 != nullptr, "memalign valid request failed")) return false;
+    aligned = (reinterpret_cast<uintptr_t>(p4) & (128 - 1)) == 0;
+    my_ptmalloc::my_free(p4);
+    return check(aligned, "memalign returned misaligned pointer");
+}
+
 int main(int argc, char** argv) {
     const char* strategy = "hybrid";
     for (int i = 1; i + 1 < argc; ++i) {
@@ -111,7 +143,8 @@ int main(int argc, char** argv) {
     bool ok = validate_basic(loaded.desc) &&
               validate_realloc(loaded.desc) &&
               validate_usable_size(loaded.desc) &&
-              validate_random(loaded.desc);
+              validate_random(loaded.desc) &&
+              validate_alignment_api(loaded.desc);
 
     std::printf("%s validation: %s\n", loaded.desc.name, ok ? "PASS" : "FAIL");
     unload_strategy(loaded);
