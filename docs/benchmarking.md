@@ -119,6 +119,29 @@ Examples:
 | `--seed N` | Deterministic random seed |
 | `--json` | Emit JSON lines |
 
+Adaptive-specific runtime parameters can be set through the environment when `--strategy adaptive` or `MY_MALLOC_MODE=adaptive` is used:
+
+| Env var | Meaning |
+|---|---|
+| `MY_MALLOC_ADAPTIVE_POLICY` | Architecture policy: `heuristic`, `fixed:small`, `fixed:medium`, `fixed:large`, `round_robin`, `epsilon_greedy`, `ucb1`, `thompson_sampling`. |
+| `MY_MALLOC_ADAPTIVE_PARAM_POLICY` | Parameter policy: `static`, `heuristic`, `coordinate_bandit`, `bayesian_offline`. |
+| `MY_MALLOC_ADAPTIVE_ARCH_WINDOW` | Allocation window for telemetry-driven architecture switching. |
+| `MY_MALLOC_ADAPTIVE_PARAM_WINDOW` | Allocation window for parameter tuning. |
+| `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` | Initial small-object page size. |
+| `MY_MALLOC_ADAPTIVE_MEDIUM_SPAN_SIZE` | Initial medium-object span size. |
+| `MY_MALLOC_ADAPTIVE_LOCAL_BATCH` | Batch-size hint for future local-cache work. |
+
+Examples:
+
+```bash
+MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=heuristic \
+  ./build/bench_runner --strategy adaptive --profile micro --json
+
+MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=static \
+  MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE=32768 \
+  ./build/bench_runner --strategy adaptive --bench same_size --size 64
+```
+
 JSON example:
 
 ```bash
@@ -300,7 +323,46 @@ Detailed raw-result notes are in [external_benchmark_results.md](external_benchm
 
 ## 14. Current Multi-mode Results
 
-The following local benchmark run was performed on May 5, 2026 after adding the independent adaptive allocator, adaptive small/medium page-span pools, and telemetry-driven adaptive policies.
+The latest focused local run was performed on May 6, 2026 after adding windowed architecture switching and the separate parameter tuning layer.
+
+```bash
+cmake --build build -j2
+ctest --test-dir build --output-on-failure
+
+./build/bench_runner --strategy libc --profile micro --json
+./build/bench_runner --strategy adaptive --profile micro --json
+MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=static ./build/bench_runner --strategy adaptive --profile micro --json
+MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=heuristic ./build/bench_runner --strategy adaptive --profile micro --json
+MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=coordinate_bandit ./build/bench_runner --strategy adaptive --profile micro --json
+./build/bench_runner --strategy libc --profile stress --json
+MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=heuristic ./build/bench_runner --strategy adaptive --profile stress --json
+```
+
+### 14.1 Latest Adaptive Two-layer Sample
+
+| Strategy / config | `same_size_64` | `same_size_256` | `batch` | `random` | Peak RSS KB |
+|---|---:|---:|---:|---:|---:|
+| `libc` | 12,574,450 | 9,694,595 | 7,019,472 | 996,505 | 30,976 |
+| `adaptive` default | 24,430,358 | 24,197,039 | 9,799,662 | 814,750 | 31,104 |
+| `adaptive`, `ucb1+static` | 27,902,697 | 28,317,132 | 10,642,325 | 840,813 | 30,848 |
+| `adaptive`, `ucb1+heuristic` | 24,653,533 | 25,055,846 | 9,568,574 | 1,047,587 | 31,104 |
+| `adaptive`, `ucb1+coordinate_bandit` | 20,157,150 | 20,690,505 | 9,333,185 | 927,191 | 30,976 |
+
+Stress sample:
+
+| Strategy / config | `random` | `fragmentation` | `cross_thread_free` | Peak RSS KB |
+|---|---:|---:|---:|---:|
+| `libc` | 1,304,079 | 1,392,338 | 881,577 | 58,880 |
+| `adaptive`, `ucb1+heuristic` | 1,302,661 | 1,613,490 | 820,079 | 59,008 |
+
+Interpretation:
+
+- Windowed adaptive routing keeps hot-path micro throughput competitive with `libc` in this local run.
+- `ucb1+static` is strongest among the tested configurations for steady same-size and batch micro workloads.
+- `ucb1+heuristic` is strongest among the tested adaptive configurations for random micro and fragmentation stress.
+- Cross-thread stress still trails `libc`; owner-thread queues and per-thread/per-CPU adaptive caches remain important next steps.
+
+The broader multi-mode run below was performed on May 5, 2026 after adding the independent adaptive allocator, adaptive small/medium page-span pools, and telemetry-driven adaptive policies. It is kept as a historical comparison across all teaching allocators.
 
 ```bash
 cmake --build build -j2
@@ -314,7 +376,7 @@ done
 
 The run compares the teaching allocator implementations, the self-developed `adaptive` allocator, and `libc` as a baseline. Values are operations per second; higher is better. Peak RSS is the maximum KB observed in that profile's subtests.
 
-### 14.1 Allocator Micro Profile
+### 14.2 Allocator Micro Profile
 
 | Strategy | `same_size_64` | `same_size_256` | `batch` | `random` | Peak RSS KB |
 |---|---:|---:|---:|---:|---:|
@@ -326,7 +388,7 @@ The run compares the teaching allocator implementations, the self-developed `ada
 | `mimalloc_like` | 23,087,757 | 22,974,563 | 9,218,316 | 947,105 | 30,976 |
 | `adaptive` | 23,284,677 | 12,417,979 | 3,073,215 | 827,614 | 30,976 |
 
-### 14.2 Allocator Stress Profile
+### 14.3 Allocator Stress Profile
 
 | Strategy | `random` | `fragmentation` | `cross_thread_free` | Peak RSS KB |
 |---|---:|---:|---:|---:|
@@ -338,7 +400,7 @@ The run compares the teaching allocator implementations, the self-developed `ada
 | `mimalloc_like` | 1,599,208 | 1,517,392 | 732,602 | 58,860 |
 | `adaptive` | 1,296,166 | 1,380,093 | 910,505 | 58,752 |
 
-### 14.3 Adaptive Policy Micro Profile
+### 14.4 Adaptive Policy Micro Profile
 
 Command:
 
@@ -359,7 +421,7 @@ done
 | `fixed:medium` | 23,401,058 | 23,942,701 | 9,224,166 | 1,074,517 | 30,976 |
 | `fixed:large` | 26,608,120 | 25,306,594 | 3,898,270 | 820,242 | 31,104 |
 
-### 14.4 Adaptive Policy Stress Profile
+### 14.5 Adaptive Policy Stress Profile
 
 | Adaptive policy | `random` | `fragmentation` | `cross_thread_free` | Peak RSS KB |
 |---|---:|---:|---:|---:|

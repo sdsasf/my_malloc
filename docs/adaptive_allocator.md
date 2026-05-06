@@ -1,175 +1,230 @@
 # Adaptive Allocator Backend
 
-`MY_MALLOC_MODE=adaptive` selects an independent adaptive allocator backend. It is not the old dispatcher that chooses among `hybrid`, `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, and `mimalloc_like`.
+`MY_MALLOC_MODE=adaptive` selects the project's independent adaptive allocator. It is not a dispatcher over `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, or `mimalloc_like`; those are teaching allocators used for comparison. Adaptive owns its metadata, telemetry, architecture policy, parameter policy, and free routing.
 
-The project now has two separate areas:
+## 1. Design Goal
 
-| Area | Purpose |
-|---|---|
-| Allocator lab | Teaching implementations such as `hybrid`, `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, and `mimalloc_like` for study, visualization, benchmarks, and comparison. |
-| Adaptive allocator | A standalone backend with its own metadata, ownership checks, telemetry, policy layer, and internal strategies. |
+The adaptive allocator is designed as a learning platform for runtime allocator adaptation:
 
-The teaching allocators are not default candidates for adaptive routing. The legacy cross-allocator demo is kept as `MY_MALLOC_MODE=adaptive_demo` and can also be loaded by tools as `--strategy adaptive_demo` or `--strategy demo_all`.
+- keep a stable ownership model so architecture changes do not break `free`;
+- switch allocation architecture only at coarse windows because architecture changes are expensive;
+- tune runtime parameters at a separate, usually more frequent window;
+- allow future adaptive architectures to expose their own parameter schema without hard-coding every policy around one fixed struct;
+- keep current code simple enough to benchmark and debug.
 
-## Ownership Model
-
-Every adaptive allocation has an `AdaptiveHeader` and is registered in the adaptive ownership table. The metadata records:
-
-- magic number;
-- requested size and usable size;
-- internal strategy id;
-- flags;
-- mmap region base and mapped size;
-- adaptive page/span pointer for pooled allocations;
-- ownership registry links.
-
-`adaptive_free(ptr)` routes by the allocation-time strategy id stored in metadata. It does not ask the current policy where the pointer should be freed, and it never passes adaptive-owned pointers to the ptmalloc/slab/family allocator free paths.
-
-Policy changes affect only future allocations.
-
-## Internal Strategies
-
-The adaptive allocator currently implements three adaptive-specific strategy ids:
-
-| Strategy | Default size range | Current implementation |
-|---|---:|---|
-| `SmallObjectStrategy` | `size <= 1024` | 16B size classes backed by 64KB adaptive pages |
-| `MediumObjectStrategy` | `1025 .. 64 KiB` | 1KiB span classes backed by 256KB adaptive spans |
-| `LargeObjectStrategy` | `> 64 KiB` | direct mmap + adaptive header |
-
-Small and medium no longer mmap every allocation. They use adaptive-owned pools:
+The current implementation is intentionally smaller than a production allocator, but the architecture is shaped so new internal architecture profiles can be added later.
 
 ```mermaid
 flowchart TB
     Req["adaptive_malloc(size)"]
-    Policy["adaptive internal policy"]
-    Small["SmallObjectStrategy<br/>16B class"]
-    Medium["MediumObjectStrategy<br/>1KiB class"]
-    Large["LargeObjectStrategy<br/>direct mmap"]
-    Page["64KB adaptive page<br/>fixed-size blocks"]
-    Span["256KB adaptive span<br/>fixed-size blocks"]
-    Header["AdaptiveHeader<br/>strategy + page/span"]
-    User["user pointer"]
+    Metrics["Window metrics<br/>latency, hit/miss, live/mapped"]
+    Arch["Architecture decision layer<br/>heuristic / fixed / bandit"]
+    Param["Parameter tuning layer<br/>static / heuristic / coordinate bandit / offline BO"]
+    Config["Versioned RuntimeConfig<br/>page size, span size, windows, batch"]
+    Small["SmallObject architecture<br/>16B classes"]
+    Medium["MediumObject architecture<br/>1KiB classes"]
+    Large["LargeObject architecture<br/>direct mmap"]
+    Header["AdaptiveHeader<br/>strategy + config_version"]
 
-    Req --> Policy
-    Policy --> Small --> Page --> Header --> User
-    Policy --> Medium --> Span --> Header
-    Policy --> Large --> Header
+    Req --> Metrics
+    Metrics --> Arch
+    Metrics --> Param
+    Param --> Config
+    Arch --> Small
+    Arch --> Medium
+    Arch --> Large
+    Config --> Small
+    Config --> Medium
+    Small --> Header
+    Medium --> Header
+    Large --> Header
 ```
 
-On free, the header's allocation-time strategy and page/span pointer decide the return path:
+## 2. Ownership Model
+
+Every adaptive allocation has an `AdaptiveHeader` and is recorded in the adaptive ownership registry.
+
+The header stores:
+
+- magic number;
+- internal architecture id;
+- flags;
+- runtime `config_version`;
+- requested and usable size;
+- mmap region base and mapped size;
+- page/span owner pointer for pooled allocations;
+- ownership registry links.
+
+`adaptive_free(ptr)` always uses allocation-time metadata. It does not ask the current architecture policy where the pointer should go. This is what makes soft switching possible: new allocations can use a new architecture/configuration while old allocations still free through the metadata they were created with.
 
 ```mermaid
 flowchart LR
     Free["adaptive_free(ptr)"]
-    Header["lookup AdaptiveHeader"]
-    Pooled["pooled block?"]
+    Lookup["ownership registry lookup"]
+    Header["AdaptiveHeader"]
+    Pooled{"pooled?"}
     Pool["return to page/span free list"]
     Mmap["munmap direct block"]
 
-    Free --> Header --> Pooled
+    Free --> Lookup --> Header --> Pooled
     Pooled -- yes --> Pool
     Pooled -- no --> Mmap
 ```
 
-This keeps strategy switching cheap: changing policy affects only future allocations, while old objects keep a stable free path.
+## 3. Internal Architectures
 
-## Policies
+The current adaptive allocator implements three internal architecture profiles. They are not exact clones of industrial allocators; they are adaptive-specific building blocks.
 
-Configure the internal policy with `MY_MALLOC_ADAPTIVE_POLICY`:
+| Architecture id | Default size range | Current implementation |
+|---|---:|---|
+| `SmallObject` | `size <= 1024` | 16B size classes backed by adaptive pages |
+| `MediumObject` | `1025 .. 64 KiB` | 1KiB classes backed by adaptive spans |
+| `LargeObject` | `> 64 KiB` | direct mmap with adaptive header |
+
+Current defaults:
+
+| Parameter | Default | Runtime env |
+|---|---:|---|
+| Small page size | `64 KiB` | `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` |
+| Medium span size | `256 KiB` | `MY_MALLOC_ADAPTIVE_MEDIUM_SPAN_SIZE` |
+| Architecture decision window | `4096` allocations per size band | `MY_MALLOC_ADAPTIVE_ARCH_WINDOW` |
+| Parameter tuning window | `8192` allocations | `MY_MALLOC_ADAPTIVE_PARAM_WINDOW` |
+| Local batch hint | `32` | `MY_MALLOC_ADAPTIVE_LOCAL_BATCH` |
+
+The current code already versions the runtime config. New pages/spans record the active config version; old pages/spans keep their original mapped size and free path.
+
+## 4. Two-Layer Adaptation
+
+Adaptive decisions are split into two layers.
+
+### Architecture Decision Layer
+
+This layer chooses which internal architecture should serve future allocations. It is deliberately windowed for telemetry policies:
+
+- `heuristic`, `fixed:*`, and `round_robin` are simple baselines;
+- `epsilon_greedy`, `ucb1`, and `thompson_sampling` update the active architecture only every architecture window for each size band;
+- between window boundaries, allocations use the active architecture for that band if it is size-compatible.
+
+Supported `MY_MALLOC_ADAPTIVE_POLICY` values:
 
 | Policy | Meaning |
 |---|---|
-| `heuristic` | Select small, medium, or large by request size. This is the default. |
-| `fixed:small` | Prefer the small strategy, with safe fallback to medium or large when the size is not suitable. |
-| `fixed:medium` | Prefer the medium strategy, with safe fallback to large for oversized requests. |
-| `fixed:large` | Use the large strategy. |
-| `round_robin` | Cycle through small, medium, and large to stress ownership routing. |
-| `epsilon_greedy` / `eps_greedy` | Classic bandit strategy: mostly choose the best telemetry score, but explore randomly with a small probability. |
-| `ucb1` / `ucb` | Upper Confidence Bound bandit: choose the best score plus an exploration bonus for under-tested strategies. |
-| `thompson_sampling` / `thompson` | Thompson-style bandit: sample from success/failure history with lightweight uncertainty noise. |
+| `heuristic` | Size-based routing: small, medium, large. |
+| `fixed:small` | Prefer small, then safely fall back for larger sizes. |
+| `fixed:medium` | Prefer medium, then fall back to large. |
+| `fixed:large` | Use direct mmap large path. |
+| `round_robin` | Cycle architectures to stress ownership routing. |
+| `epsilon_greedy` / `eps_greedy` | Mostly exploit the best telemetry score, sometimes explore. |
+| `ucb1` / `ucb` | Add an exploration bonus for under-tested architectures. |
+| `thompson_sampling` / `thompson` | Sample from success/failure uncertainty with lightweight jitter. |
 
-Examples:
+### Parameter Tuning Layer
 
-```bash
-MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_POLICY=heuristic ./build/test_basic
-MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_POLICY=fixed:small ./build/allocator_validate --strategy adaptive
-MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_POLICY=ucb1 ./build/allocator_validate --strategy adaptive
-MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_POLICY=thompson_sampling ./build/allocator_validate --strategy adaptive
+This layer changes runtime parameters under the selected architecture. It is controlled by `MY_MALLOC_ADAPTIVE_PARAM_POLICY`.
+
+| Parameter policy | Current behavior | Best use |
+|---|---|---|
+| `static` | Read env/default config once and never tune it. | Reproducible benchmarks and debugging. |
+| `heuristic` | Adjust page/span size and batch hint from memory pressure and pool miss signals. | Default low-overhead runtime adaptation. |
+| `coordinate_bandit` / `coordinate` | Explore one parameter coordinate per tuning window. | Teaching baseline for online tuning. |
+| `bayesian_offline` / `bayesian` | Runtime stays fixed and consumes env/offline-tuned values. | Offline benchmark replay and slow tuning. |
+
+Bayesian optimization is feasible, but it is better as an offline or slow-online tuner. A malloc workload is often non-stationary, so a high-frequency Bayesian optimizer can overfit phase noise and add too much overhead. In this project the intended split is:
+
+```text
+fast runtime tuning: heuristic or coordinate bandit
+slow/offline tuning: Bayesian optimization over benchmark replay
+experimental tuning: RL or contextual policy once metrics are stable
 ```
 
-The telemetry-driven policies only choose among size-compatible adaptive internal strategies. For example, a 2 KiB allocation can choose medium or large, but not small. If a selected strategy cannot satisfy the request, allocation falls back through the size-based safe path.
+## 5. Current Metrics
 
-Current policy scoring uses adaptive-internal telemetry:
-
-- policy trials, successes, and failures per strategy;
-- EWMA allocation latency per strategy;
-- pool hit/miss counts for small/medium page/span pools;
-- live bytes and mapped bytes as a coarse memory-pressure signal.
-
-These are online baseline policies, not a full ML/RL allocator yet. They provide a practical place to plug in future offline decision tables, contextual bandits, or reinforcement-learning models.
-
-## Stats
-
-The adaptive backend records lightweight relaxed-atomic stats:
+Adaptive records lightweight relaxed-atomic metrics:
 
 - malloc/free/realloc calls;
 - policy decisions;
+- architecture switches;
+- parameter decisions;
 - allocation failures;
-- per-strategy alloc/free count;
-- per-strategy requested and usable bytes;
-- per-strategy policy trials, successes, and failures;
-- per-strategy EWMA allocation latency;
-- per-strategy pool hits and misses;
-- live bytes;
-- mapped bytes.
+- per-architecture allocation/free counts;
+- requested and usable bytes;
+- policy trials, successes, and failures;
+- EWMA allocation latency;
+- pool hits and misses;
+- live bytes and mapped bytes.
 
-These stats belong to the adaptive backend and are separate from the teaching allocator lab telemetry.
+These metrics are adaptive-internal. They are separate from the teaching allocator lab metrics.
 
-## Current Benchmark Snapshot
+## 6. Soft Switching
 
-The May 5, 2026 local `bench_runner --profile micro` run shows that telemetry-driven policies are now measurable against the heuristic baseline:
+Soft switching means the allocator changes only the decision used for future allocations:
 
-| Adaptive policy | `same_size_64` ops/sec | `batch` ops/sec | `random` ops/sec |
-|---|---:|---:|---:|
-| `heuristic` | 8,185,376 | 8,230,347 | 844,231 |
-| `epsilon_greedy` | 19,812,613 | 8,217,441 | 923,744 |
-| `ucb1` | 22,236,701 | 9,492,521 | 922,979 |
-| `thompson_sampling` | 18,707,184 | 2,483,404 | 796,735 |
-| `round_robin` | 22,045,714 | 10,005,564 | 1,071,706 |
+```mermaid
+sequenceDiagram
+    participant P as Policy
+    participant C as RuntimeConfig v1
+    participant O as Old allocation
+    participant N as New allocation
+    participant F as Free
 
-In this run, `ucb1` is the strongest telemetry-driven policy on fixed-size and batch micro workloads, while `epsilon_greedy` is close on random. `thompson_sampling` is intentionally kept as a lightweight baseline and is not yet tuned.
+    P->>C: choose SmallObject + 64KB page
+    C->>O: allocate header(config_version=1)
+    P->>C: tune to RuntimeConfig v2
+    C->>N: allocate header(config_version=2)
+    F->>O: free through v1 page metadata
+    F->>N: free through v2 page metadata
+```
 
-## Current Simplifications
+This avoids a hard migration step. The tradeoff is that old pages/spans may keep older parameter choices alive until their objects are freed.
 
-The current implementation is still intentionally simple:
+## 7. Extension Plan
 
-- page/span metadata and ownership are coarse-grained and protected by a simple mutex;
-- empty adaptive pages/spans are cached, not returned to the OS yet;
+Future internal architectures should be registered as profiles rather than hard-coded in a policy switch. A full registry should expose:
+
+```text
+arch_id
+name
+size compatibility function
+allocate/free/realloc hooks
+parameter schema
+default parameters
+metrics export hook
+```
+
+A future parameter schema should be dynamic:
+
+```text
+ParamDescriptor {
+  name
+  type: u64 | double | bool | enum
+  default
+  min/max or enum values
+  hot_update_allowed
+}
+```
+
+The current code implements the first step of that design: versioned runtime config, separate architecture and parameter policy, and env-configurable parameters. It does not yet expose a general plugin-style adaptive architecture registry.
+
+## 8. Simplifications
+
+Current simplifications are deliberate:
+
+- ownership registry is correctness-oriented and uses a global mutex;
+- page/span pools use a global mutex;
+- empty pages/spans are cached, not released to the OS;
 - small classes use uniform 16B spacing;
 - medium classes use uniform 1KiB spacing;
-- aligned allocations use a safe direct-mmap path instead of the small/medium pools;
-- the ownership registry is simple and correctness-oriented.
+- aligned allocations use direct mmap;
+- `local_batch_size` is currently a tunable hint for future local-cache work, not a full per-thread cache implementation;
+- `bayesian_offline` does not run an optimizer inside the allocator; it represents the mode where env/config values come from an offline tuning run.
 
-Next optimization steps:
-
-- per-thread or per-CPU adaptive caches for small classes;
-- empty page/span release and decay;
-- telemetry for phase changes, cache hit rates, live/mapped ratio, and remote-free ratio;
-- policy hooks that tune thresholds, batch sizes, and release aggressiveness;
-- offline decision-table, contextual bandit, or RL policy over adaptive-internal signals.
-
-## Run
+## 9. Commands
 
 ```bash
 ./build/allocator_validate --strategy adaptive
-MY_MALLOC_ADAPTIVE_POLICY=heuristic ./build/allocator_validate --strategy adaptive
-MY_MALLOC_ADAPTIVE_POLICY=fixed:small ./build/allocator_validate --strategy adaptive
-MY_MALLOC_ADAPTIVE_POLICY=fixed:medium ./build/allocator_validate --strategy adaptive
-MY_MALLOC_ADAPTIVE_POLICY=fixed:large ./build/allocator_validate --strategy adaptive
-MY_MALLOC_ADAPTIVE_POLICY=round_robin ./build/allocator_validate --strategy adaptive
-MY_MALLOC_ADAPTIVE_POLICY=epsilon_greedy ./build/allocator_validate --strategy adaptive
 MY_MALLOC_ADAPTIVE_POLICY=ucb1 ./build/allocator_validate --strategy adaptive
-MY_MALLOC_ADAPTIVE_POLICY=thompson_sampling ./build/allocator_validate --strategy adaptive
+MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=heuristic ./build/allocator_validate --strategy adaptive
+MY_MALLOC_ADAPTIVE_POLICY=ucb1 MY_MALLOC_ADAPTIVE_PARAM_POLICY=coordinate_bandit ./build/allocator_validate --strategy adaptive
+MY_MALLOC_ADAPTIVE_PARAM_POLICY=static MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE=32768 ./build/allocator_validate --strategy adaptive
 LD_PRELOAD=./build/libmy_ptmalloc.so MY_MALLOC_MODE=adaptive ./build/test_basic
 ```

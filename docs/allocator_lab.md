@@ -57,7 +57,7 @@ flowchart TB
 | `tcmalloc_like` | Thread caches, central free lists, 64KB spans | Study tcmalloc-style batching and size classes |
 | `jemalloc_like` | Arenas, size-class runs, per-thread tcache | Study arena/run organization |
 | `mimalloc_like` | Per-thread heaps, owned pages, remote-free queues | Study cross-thread free ownership |
-| `adaptive` | Independent adaptive backend with internal strategies | Study adaptive ownership, metadata, and policy boundaries |
+| `adaptive` | Independent adaptive backend with internal architectures and parameter tuning | Study adaptive ownership, metadata, architecture switching, and tuning boundaries |
 | `adaptive_demo` / `demo_all` | Legacy dispatcher over teaching modes | Demonstrate cross-allocator policy selection |
 | `libc` / `glibc` | System malloc | Reference baseline |
 | `plugin:path.so` | External shared library | User-defined allocator experiments |
@@ -179,7 +179,12 @@ done
 
 ## 7. Adaptive Allocator Experiments
 
-The built-in `adaptive` strategy is the experimental allocator design in this project, not a wrapper around the teaching allocators. Its internal strategies should be designed for low-cost switching and stable ownership routing. Useful telemetry includes:
+The built-in `adaptive` strategy is the experimental allocator design in this project, not a wrapper around the teaching allocators. Its internal architectures should be designed for low-cost soft switching and stable ownership routing. Adaptive has two decision layers:
+
+- an architecture layer that switches small/medium/large internal architectures at allocation-window boundaries;
+- a parameter layer that tunes runtime config such as page/span size and batch hints at a separate window.
+
+Useful telemetry includes:
 
 - allocation count by size class;
 - free count by size class;
@@ -192,13 +197,20 @@ The built-in `adaptive` strategy is the experimental allocator design in this pr
 - arena lock contention;
 - EWMA and p50/p99 allocation latency samples.
 
-The current adaptive allocator includes both simple baselines and online bandit policies:
+The current adaptive allocator includes both simple architecture baselines and online bandit policies:
 
 - `heuristic`: size-based baseline;
 - `round_robin`: ownership stress baseline;
 - `epsilon_greedy`: classic explore/exploit bandit;
 - `ucb1`: upper-confidence-bound bandit;
 - `thompson_sampling`: Thompson-style success/failure sampling.
+
+Parameter policies are configured with `MY_MALLOC_ADAPTIVE_PARAM_POLICY`:
+
+- `static`: fixed env/default parameters;
+- `heuristic`: low-overhead runtime tuning from memory pressure and pool hit/miss rates;
+- `coordinate_bandit`: explores one parameter coordinate at a time;
+- `bayesian_offline`: fixed runtime values produced by an external/offline tuning process.
 
 Use these before moving to heavier reinforcement learning or offline models:
 

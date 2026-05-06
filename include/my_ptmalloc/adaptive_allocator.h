@@ -1,7 +1,7 @@
 #pragma once
 // Independent adaptive allocator backend.
 // This is NOT a dispatcher over teaching allocators - it is a standalone
-// allocator with its own metadata, ownership, internal strategies, and policy.
+// allocator with its own metadata, ownership, internal architectures, and policy.
 
 #include <atomic>
 #include <cstddef>
@@ -22,7 +22,7 @@ enum class AdaptiveStrategyId : uint8_t {
 // --- Policy kinds (adaptive-internal, NOT the old runtime AdaptivePolicyKind) -
 
 enum class AdaptiveInternalPolicy : uint8_t {
-    Heuristic        = 0,   // size-based routing (default baseline)
+    Heuristic        = 0,   // size-based architecture routing (default baseline)
     FixedSmall       = 1,   // force SmallObject with safe fallback
     FixedMedium      = 2,   // force MediumObject with safe fallback
     FixedLarge       = 3,   // force LargeObject
@@ -30,6 +30,13 @@ enum class AdaptiveInternalPolicy : uint8_t {
     EpsilonGreedy    = 5,   // classic multi-armed bandit baseline
     Ucb1             = 6,   // upper confidence bound bandit
     ThompsonSampling = 7,   // lightweight Thompson-style bandit
+};
+
+enum class AdaptiveParameterPolicy : uint8_t {
+    Static          = 0,   // read env/default parameters and keep them fixed
+    Heuristic       = 1,   // adjust parameters from pressure/hit-rate signals
+    CoordinateBandit = 2,  // explore one parameter coordinate at a time
+    BayesianOffline = 3,   // consume offline tuned/env parameters at runtime
 };
 
 // --- Adaptive block header (prepended to every allocation) -----------------
@@ -41,6 +48,7 @@ struct AdaptiveHeader {
     AdaptiveStrategyId strategy;      // which internal strategy allocated this
     uint8_t            flags;         // bit 0: memalign allocation
     uint16_t           _pad;          // alignment padding
+    uint32_t           config_version;// runtime config version used at allocation
     size_t             requested;     // user-requested size
     size_t             usable;        // usable bytes after header
     size_t             mapped_size;   // total mmap region size
@@ -92,6 +100,8 @@ struct AdaptiveStats {
     std::atomic<uint64_t> realloc_calls{0};
     std::atomic<uint64_t> failure_count{0};
     std::atomic<uint64_t> policy_decisions{0};
+    std::atomic<uint64_t> architecture_switches{0};
+    std::atomic<uint64_t> parameter_decisions{0};
 
     // per-strategy
     static constexpr size_t NUM_STRATEGIES = 3;
@@ -108,6 +118,8 @@ struct AdaptiveStatsSnapshot {
     uint64_t realloc_calls;
     uint64_t failure_count;
     uint64_t policy_decisions;
+    uint64_t architecture_switches;
+    uint64_t parameter_decisions;
 
     struct PerStrategy {
         uint64_t alloc_count;
@@ -125,6 +137,16 @@ struct AdaptiveStatsSnapshot {
 
     int64_t live_bytes;
     int64_t mapped_bytes;
+};
+
+struct AdaptiveConfigSnapshot {
+    uint32_t version;
+    AdaptiveParameterPolicy parameter_policy;
+    size_t small_page_size;
+    size_t medium_span_size;
+    uint32_t architecture_window;
+    uint32_t parameter_window;
+    uint32_t local_batch_size;
 };
 
 // --- Public API ------------------------------------------------------------
@@ -145,5 +167,8 @@ void adaptive_stats_reset() noexcept;
 // Policy query
 [[nodiscard]] AdaptiveInternalPolicy adaptive_current_policy() noexcept;
 [[nodiscard]] const char* adaptive_policy_name(AdaptiveInternalPolicy p) noexcept;
+[[nodiscard]] AdaptiveParameterPolicy adaptive_current_parameter_policy() noexcept;
+[[nodiscard]] const char* adaptive_parameter_policy_name(AdaptiveParameterPolicy p) noexcept;
+[[nodiscard]] AdaptiveConfigSnapshot adaptive_config_snapshot() noexcept;
 
 } // namespace my_ptmalloc
