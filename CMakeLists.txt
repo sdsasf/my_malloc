@@ -38,6 +38,17 @@ target_link_libraries(test_stress PRIVATE my_ptmalloc_static pthread)
 target_compile_options(test_stress PRIVATE -O2 -march=native)
 add_test(NAME stress COMMAND test_stress)
 
+add_executable(test_adaptive_control test/test_adaptive_control.cpp)
+target_link_libraries(test_adaptive_control PRIVATE my_ptmalloc_static pthread)
+target_compile_options(test_adaptive_control PRIVATE -O2 -march=native)
+foreach(profile balanced low_latency low_rss large_heavy cross_thread)
+  add_test(NAME adaptive_control_${profile}
+           COMMAND ${CMAKE_COMMAND} -E env
+           MY_MALLOC_MODE=adaptive
+           MY_MALLOC_ADAPTIVE_PROFILE=${profile}
+           $<TARGET_FILE:test_adaptive_control>)
+endforeach()
+
 add_executable(test_debug test/test_debug.cpp)
 target_link_libraries(test_debug PRIVATE my_ptmalloc_static pthread)
 target_compile_options(test_debug PRIVATE -O0 -g)

@@ -1,5 +1,8 @@
 // Independent adaptive allocator backend.
-// All allocations carry an AdaptiveHeader for ownership and strategy tracking.
+// All allocations carry an AdaptiveHeader for ownership and base-mechanism
+// tracking. The historical "strategy" name in code refers to SmallObject,
+// MediumObject, and LargeObject base allocation mechanisms, not full allocator
+// architectures.
 // V2: small/medium use adaptive-owned pages/spans and size-class free lists;
 // large/aligned allocations use direct mmap.
 
@@ -73,6 +76,15 @@ struct AdaptiveRuntimeConfig {
     uint32_t empty_cache_limit;
     uint32_t cooldown_windows;
     AdaptiveProfileId profile;
+};
+
+struct AdaptiveControlState {
+    AdaptiveRuntimeConfig config;
+    AdaptiveInternalPolicy mechanism_policy;
+    AdaptiveParameterPolicy parameter_policy;
+    bool empty_release_enabled;
+    bool large_path_preferred;
+    bool remote_free_reserved;
 };
 
 std::mutex g_adaptive_config_mutex;
@@ -174,6 +186,34 @@ static AdaptiveProfileId parse_profile(const char* env) noexcept {
     return AdaptiveProfileId::Balanced;
 }
 
+static bool adaptive_env_present(const char* name) noexcept {
+    const char* env = std::getenv(name);
+    return env && *env;
+}
+
+static void apply_profile_preset_defaults(AdaptiveProfileId profile) noexcept {
+    bool explicit_empty = adaptive_env_present("MY_MALLOC_ADAPTIVE_EMPTY_CACHE_LIMIT");
+    bool explicit_batch = adaptive_env_present("MY_MALLOC_ADAPTIVE_LOCAL_BATCH");
+    switch (profile) {
+        case AdaptiveProfileId::LowLatency:
+            if (!explicit_empty) g_config_empty_cache_limit.store(4, std::memory_order_relaxed);
+            if (!explicit_batch) g_config_local_batch_size.store(64, std::memory_order_relaxed);
+            break;
+        case AdaptiveProfileId::LowRss:
+            if (!explicit_empty) g_config_empty_cache_limit.store(0, std::memory_order_relaxed);
+            if (!explicit_batch) g_config_local_batch_size.store(16, std::memory_order_relaxed);
+            break;
+        case AdaptiveProfileId::LargeHeavy:
+            if (!explicit_empty) g_config_empty_cache_limit.store(1, std::memory_order_relaxed);
+            break;
+        case AdaptiveProfileId::CrossThread:
+            if (!explicit_empty) g_config_empty_cache_limit.store(2, std::memory_order_relaxed);
+            break;
+        case AdaptiveProfileId::Balanced:
+            break;
+    }
+}
+
 static void adaptive_init_runtime_config_once() noexcept {
     adaptive_init_parameter_policy();
     std::lock_guard<std::mutex> lock(g_adaptive_config_mutex);
@@ -220,9 +260,9 @@ static void adaptive_init_runtime_config_once() noexcept {
                                0,
                                1024)),
         std::memory_order_relaxed);
-    g_config_profile.store(static_cast<uint8_t>(
-        parse_profile(std::getenv("MY_MALLOC_ADAPTIVE_PROFILE"))),
-        std::memory_order_relaxed);
+    AdaptiveProfileId profile = parse_profile(std::getenv("MY_MALLOC_ADAPTIVE_PROFILE"));
+    g_config_profile.store(static_cast<uint8_t>(profile), std::memory_order_relaxed);
+    apply_profile_preset_defaults(profile);
 }
 
 static void adaptive_init_runtime_config() noexcept {
@@ -242,6 +282,17 @@ static AdaptiveRuntimeConfig adaptive_runtime_config() noexcept {
     cfg.cooldown_windows = g_config_cooldown_windows.load(std::memory_order_relaxed);
     cfg.profile = static_cast<AdaptiveProfileId>(g_config_profile.load(std::memory_order_relaxed));
     return cfg;
+}
+
+static AdaptiveControlState adaptive_control_state() noexcept {
+    AdaptiveControlState state{};
+    state.config = adaptive_runtime_config();
+    state.mechanism_policy = g_adaptive_policy;
+    state.parameter_policy = g_adaptive_parameter_policy;
+    state.empty_release_enabled = state.config.empty_cache_limit < UINT32_MAX;
+    state.large_path_preferred = state.config.profile == AdaptiveProfileId::LargeHeavy;
+    state.remote_free_reserved = state.config.profile == AdaptiveProfileId::CrossThread;
+    return state;
 }
 
 static void adaptive_init_policy_once() noexcept {
@@ -273,7 +324,7 @@ static void adaptive_init_policy() noexcept {
     pthread_once(&g_adaptive_policy_once, adaptive_init_policy_once);
 }
 
-// --- Strategy selection ----------------------------------------------------
+// --- Base mechanism selection ---------------------------------------------
 
 static AdaptiveStrategyId heuristic_strategy(size_t size) noexcept {
     if (size <= 1024) return AdaptiveStrategyId::SmallObject;
@@ -393,7 +444,7 @@ static AdaptiveStrategyId profile_preferred_strategy(size_t size,
     return heuristic_strategy(size);
 }
 
-static AdaptiveStrategyId windowed_architecture_select(size_t size,
+static AdaptiveStrategyId windowed_mechanism_select(size_t size,
                                                        const AdaptiveStrategyId* candidates,
                                                        size_t count,
                                                        AdaptiveStrategyId (*selector)(const AdaptiveStrategyId*, size_t)) noexcept {
@@ -487,7 +538,7 @@ static AdaptiveStrategyId select_strategy(size_t size) noexcept {
 
     switch (g_adaptive_policy) {
         case AdaptiveInternalPolicy::Heuristic:
-            return heuristic_strategy(size);
+            return profile_preferred_strategy(size, adaptive_runtime_config().profile);
 
         case AdaptiveInternalPolicy::FixedSmall:
             if (size <= 1024) return AdaptiveStrategyId::SmallObject;
@@ -513,25 +564,25 @@ static AdaptiveStrategyId select_strategy(size_t size) noexcept {
         case AdaptiveInternalPolicy::EpsilonGreedy: {
             AdaptiveStrategyId candidates[3];
             size_t count = candidate_strategies(size, candidates);
-            return windowed_architecture_select(size, candidates, count, epsilon_greedy_select);
+            return windowed_mechanism_select(size, candidates, count, epsilon_greedy_select);
         }
 
         case AdaptiveInternalPolicy::Ucb1: {
             AdaptiveStrategyId candidates[3];
             size_t count = candidate_strategies(size, candidates);
-            return windowed_architecture_select(size, candidates, count, ucb1_select);
+            return windowed_mechanism_select(size, candidates, count, ucb1_select);
         }
 
         case AdaptiveInternalPolicy::ThompsonSampling: {
             AdaptiveStrategyId candidates[3];
             size_t count = candidate_strategies(size, candidates);
-            return windowed_architecture_select(size, candidates, count, thompson_select);
+            return windowed_mechanism_select(size, candidates, count, thompson_select);
         }
     }
     return heuristic_strategy(size);
 }
 
-// --- Strategy index helper -------------------------------------------------
+// --- Base mechanism index helper ------------------------------------------
 
 static size_t strategy_index(AdaptiveStrategyId id) noexcept {
     switch (id) {
@@ -719,6 +770,7 @@ static AdaptiveWindowSnapshot adaptive_window_delta_locked() noexcept {
     delta.free_calls = free_calls - g_last_window.free_calls;
     delta.realloc_calls = realloc_calls - g_last_window.realloc_calls;
     delta.architecture_switches = arch_switches - g_last_window.architecture_switches;
+    delta.mechanism_switches = delta.architecture_switches;
     delta.parameter_decisions = param_decisions - g_last_window.parameter_decisions;
     delta.failure_count = failures - g_last_window.failure_count;
 
@@ -1359,6 +1411,7 @@ AdaptiveStatsSnapshot adaptive_stats_snapshot() noexcept {
     s.failure_count    = g_adaptive_stats.failure_count.load(std::memory_order_relaxed);
     s.policy_decisions = g_adaptive_stats.policy_decisions.load(std::memory_order_relaxed);
     s.architecture_switches = g_adaptive_stats.architecture_switches.load(std::memory_order_relaxed);
+    s.mechanism_switches = s.architecture_switches;
     s.parameter_decisions = g_adaptive_stats.parameter_decisions.load(std::memory_order_relaxed);
     s.empty_pages = g_adaptive_stats.empty_pages.load(std::memory_order_relaxed);
     s.empty_spans = g_adaptive_stats.empty_spans.load(std::memory_order_relaxed);
@@ -1476,6 +1529,27 @@ AdaptiveConfigSnapshot adaptive_config_snapshot() noexcept {
     s.empty_cache_limit = cfg.empty_cache_limit;
     s.cooldown_windows = cfg.cooldown_windows;
     s.profile = cfg.profile;
+    return s;
+}
+
+AdaptiveControlStateSnapshot adaptive_control_state_snapshot() noexcept {
+    adaptive_init_policy();
+    AdaptiveControlState state = adaptive_control_state();
+    AdaptiveControlStateSnapshot s{};
+    s.version = state.config.version;
+    s.control_preset = state.config.profile;
+    s.mechanism_policy = state.mechanism_policy;
+    s.parameter_policy = state.parameter_policy;
+    s.mechanism_window = state.config.architecture_window;
+    s.parameter_window = state.config.parameter_window;
+    s.cooldown_windows = state.config.cooldown_windows;
+    s.empty_cache_limit = state.config.empty_cache_limit;
+    s.local_batch_size = state.config.local_batch_size;
+    s.small_page_size = state.config.small_page_size;
+    s.medium_span_size = state.config.medium_span_size;
+    s.empty_release_enabled = state.empty_release_enabled;
+    s.large_path_preferred = state.large_path_preferred;
+    s.remote_free_reserved = state.remote_free_reserved;
     return s;
 }
 

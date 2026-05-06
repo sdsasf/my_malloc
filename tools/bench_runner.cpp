@@ -298,8 +298,11 @@ static void print_json(const char* strategy, const BenchResult& r) {
     if (strategy_is_adaptive(strategy)) {
         my_ptmalloc::AdaptiveStatsSnapshot s = my_ptmalloc::adaptive_stats_snapshot();
         my_ptmalloc::AdaptiveConfigSnapshot c = my_ptmalloc::adaptive_config_snapshot();
+        my_ptmalloc::AdaptiveControlStateSnapshot control = my_ptmalloc::adaptive_control_state_snapshot();
         std::printf(",\"adaptive\":{\"architecture_switches\":%llu,\"parameter_decisions\":%llu,"
-                    "\"config_version\":%u,\"profile\":\"%s\",\"mapped_bytes\":%lld,"
+                    "\"mechanism_switches\":%llu,\"config_version\":%u,\"control_version\":%u,"
+                    "\"profile\":\"%s\",\"control_preset\":\"%s\",\"release_policy\":\"%s\","
+                    "\"large_path_preferred\":%s,\"remote_free_reserved\":%s,\"mapped_bytes\":%lld,"
                     "\"live_bytes\":%lld,\"mapped_live_ratio\":%.3f,"
                     "\"empty_pages\":%llu,\"empty_spans\":%llu,\"released_pages\":%llu,"
                     "\"released_spans\":%llu,\"release_unmapped_bytes\":%llu,"
@@ -307,8 +310,14 @@ static void print_json(const char* strategy, const BenchResult& r) {
                     "\"pool_hits\":[%llu,%llu,%llu],\"pool_misses\":[%llu,%llu,%llu]}",
                     static_cast<unsigned long long>(s.architecture_switches),
                     static_cast<unsigned long long>(s.parameter_decisions),
+                    static_cast<unsigned long long>(s.mechanism_switches),
                     c.version,
+                    control.version,
                     my_ptmalloc::adaptive_profile_name(c.profile),
+                    my_ptmalloc::adaptive_profile_name(control.control_preset),
+                    control.empty_release_enabled ? "enabled" : "disabled",
+                    control.large_path_preferred ? "true" : "false",
+                    control.remote_free_reserved ? "true" : "false",
                     static_cast<long long>(s.mapped_bytes),
                     static_cast<long long>(s.live_bytes),
                     s.mapped_live_ratio,
@@ -555,10 +564,32 @@ int main(int argc, char** argv) {
                             "\"ops_per_sec_mean\":%.0f,\"ops_per_sec_median\":%.0f,"
                             "\"ops_per_sec_p95\":%.0f,\"ops_per_sec_stddev\":%.0f,"
                             "\"ops_per_sec_min\":%.0f,\"ops_per_sec_max\":%.0f,"
-                            "\"last_ms\":%.3f,\"peak_rss_kb\":%zu}\n",
+                            "\"last_ms\":%.3f,\"peak_rss_kb\":%zu",
                             loaded.desc.name, last.name.c_str(), cfg.repeats,
                             summary.mean, summary.median, summary.p95, summary.stddev,
                             summary.min, summary.max, last.ms, last.peak_rss_kb);
+                if (strategy_is_adaptive(loaded.desc.name)) {
+                    auto s = my_ptmalloc::adaptive_stats_snapshot();
+                    auto control = my_ptmalloc::adaptive_control_state_snapshot();
+                    std::printf(",\"adaptive\":{\"architecture_switches\":%llu,"
+                                "\"mechanism_switches\":%llu,\"parameter_decisions\":%llu,"
+                                "\"control_version\":%u,\"control_preset\":\"%s\","
+                                "\"release_policy\":\"%s\",\"large_path_preferred\":%s,"
+                                "\"remote_free_reserved\":%s,\"mapped_bytes\":%lld,"
+                                "\"live_bytes\":%lld,\"mapped_live_ratio\":%.3f}",
+                                static_cast<unsigned long long>(s.architecture_switches),
+                                static_cast<unsigned long long>(s.mechanism_switches),
+                                static_cast<unsigned long long>(s.parameter_decisions),
+                                control.version,
+                                my_ptmalloc::adaptive_profile_name(control.control_preset),
+                                control.empty_release_enabled ? "enabled" : "disabled",
+                                control.large_path_preferred ? "true" : "false",
+                                control.remote_free_reserved ? "true" : "false",
+                                static_cast<long long>(s.mapped_bytes),
+                                static_cast<long long>(s.live_bytes),
+                                s.mapped_live_ratio);
+                }
+                std::printf("}\n");
             } else {
                 std::printf("  %-16s mean=%10.0f median=%10.0f p95=%10.0f stddev=%8.0f min=%10.0f max=%10.0f peak=%zuKB\n",
                             last.name.c_str(), summary.mean, summary.median, summary.p95,

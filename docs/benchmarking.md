@@ -124,16 +124,16 @@ Adaptive-specific runtime parameters can be set through the environment when `--
 
 | Env var | Meaning |
 |---|---|
-| `MY_MALLOC_ADAPTIVE_POLICY` | Architecture policy: `heuristic`, `fixed:small`, `fixed:medium`, `fixed:large`, `round_robin`, `epsilon_greedy`, `ucb1`, `thompson_sampling`. |
+| `MY_MALLOC_ADAPTIVE_POLICY` | Compatibility mechanism-selection policy: `heuristic`, `fixed:small`, `fixed:medium`, `fixed:large`, `round_robin`, `epsilon_greedy`, `ucb1`, `thompson_sampling`. |
 | `MY_MALLOC_ADAPTIVE_PARAM_POLICY` | Parameter policy: `static`, `heuristic`, `coordinate_bandit`, `bayesian_offline`. |
-| `MY_MALLOC_ADAPTIVE_ARCH_WINDOW` | Allocation window for telemetry-driven architecture switching. |
+| `MY_MALLOC_ADAPTIVE_ARCH_WINDOW` | Legacy name for the telemetry-driven mechanism-control window. |
 | `MY_MALLOC_ADAPTIVE_PARAM_WINDOW` | Allocation window for parameter tuning. |
 | `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` | Initial small-object page size. |
 | `MY_MALLOC_ADAPTIVE_MEDIUM_SPAN_SIZE` | Initial medium-object span size. |
 | `MY_MALLOC_ADAPTIVE_LOCAL_BATCH` | Batch-size hint for future local-cache work. |
 | `MY_MALLOC_ADAPTIVE_EMPTY_CACHE_LIMIT` | Empty page/span keep count before release. |
-| `MY_MALLOC_ADAPTIVE_COOLDOWN_WINDOWS` | Cooldown after architecture/profile switches. |
-| `MY_MALLOC_ADAPTIVE_PROFILE` | Initial profile: `balanced`, `low_latency`, `low_rss`, `large_heavy`, `cross_thread`. |
+| `MY_MALLOC_ADAPTIVE_COOLDOWN_WINDOWS` | Cooldown after mechanism preference changes. |
+| `MY_MALLOC_ADAPTIVE_PROFILE` | Initial control preset/objective: `balanced`, `low_latency`, `low_rss`, `large_heavy`, `cross_thread`. |
 
 Examples:
 
@@ -156,7 +156,7 @@ JSON example:
 ```
 
 ```json
-{"strategy":"adaptive","benchmark":"same_size_64","ops_per_sec":24430358,"ms":40.933,"peak_rss_kb":31104,"adaptive":{"architecture_switches":0,"parameter_decisions":0,"config_version":1,"profile":"balanced","mapped_bytes":0,"live_bytes":0,"mapped_live_ratio":0.000,"empty_pages":0,"empty_spans":0,"released_pages":0,"released_spans":0,"release_unmapped_bytes":0,"strategy_allocs":[1000,0,0],"strategy_frees":[1000,0,0],"pool_hits":[999,0,0],"pool_misses":[1,0,0]}}
+{"strategy":"adaptive","benchmark":"same_size_64","ops_per_sec":24430358,"ms":40.933,"peak_rss_kb":31104,"adaptive":{"architecture_switches":0,"mechanism_switches":0,"parameter_decisions":0,"config_version":1,"control_version":1,"profile":"balanced","control_preset":"balanced","release_policy":"enabled","large_path_preferred":false,"remote_free_reserved":false,"mapped_bytes":0,"live_bytes":0,"mapped_live_ratio":0.000,"empty_pages":0,"empty_spans":0,"released_pages":0,"released_spans":0,"release_unmapped_bytes":0,"strategy_allocs":[1000,0,0],"strategy_frees":[1000,0,0],"pool_hits":[999,0,0],"pool_misses":[1,0,0]}}
 ```
 
 When `--repeats N` is greater than 1, JSON output reports aggregate `mean`, `median`, `p95`, `stddev`, `min`, and `max` operation rates instead of relying on a single sample.
@@ -332,7 +332,7 @@ Detailed raw-result notes are in [external_benchmark_results.md](external_benchm
 
 ## 14. Current Multi-mode Results
 
-The latest focused local run was performed on May 6, 2026 after adding windowed architecture switching and the separate parameter tuning layer.
+The latest focused local run was performed on May 6, 2026 after adding mechanism control, window stats, and parameter tuning.
 
 ```bash
 cmake --build build -j2

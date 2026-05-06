@@ -2,14 +2,14 @@
 
 `my_malloc` is a C++17 learning-oriented memory allocator. It can be used as an `LD_PRELOAD` malloc replacement, and it also provides a strategy/benchmark lab for comparing allocator designs.
 
-The project tries to reproduce the core ideas of industrial allocators without fully cloning glibc malloc, jemalloc, tcmalloc, or mimalloc. Those implementations are the teaching allocator lab. The separate `adaptive` allocator is the project's experimental design: it owns its metadata and telemetry, and separates window-level architecture switching from runtime parameter tuning.
+The project tries to reproduce the core ideas of industrial allocators without fully cloning glibc malloc, jemalloc, tcmalloc, or mimalloc. Those implementations are the teaching allocator lab. The separate `adaptive` allocator is the project's experimental design: it owns its metadata and telemetry, and uses a runtime control state to configure adaptive-internal mechanisms.
 
 ## What This Project Implements
 
 The project is organized around four parts:
 
 1. **Allocator lab**: simplified implementations of classic industrial allocator ideas for learning and comparison.
-2. **Adaptive allocator**: an independent experimental allocator with adaptive-owned metadata, telemetry, adaptive-internal architectures, and parameter tuning.
+2. **Adaptive allocator**: an independent experimental allocator with adaptive-owned metadata, base allocation mechanisms, runtime mechanism control, and parameter tuning.
 3. **Common harness**: validation, built-in benchmarks, optional external benchmarks, and LD_PRELOAD smoke tests.
 4. **Technical docs**: design documents for each allocator, including architecture, data structures, simplifications, and benchmark guidance.
 
@@ -22,7 +22,7 @@ Runtime-selectable strategies:
 | `tcmalloc_like` | Teaching allocator | Size classes, thread caches, central free lists, batch refill/drain, 64KB spans. |
 | `jemalloc_like` | Teaching allocator | Arenas, per-thread tcache, size-class runs, arena-local refill. |
 | `mimalloc_like` | Teaching allocator | Per-thread heaps, page ownership, local free lists, remote-free queues. |
-| `adaptive` | Experimental allocator | Adaptive-owned metadata, small pages, medium spans, direct-mmap large blocks, windowed architecture policy, runtime parameter policy. |
+| `adaptive` | Experimental allocator | Adaptive-owned metadata, SmallObject/MediumObject/LargeObject base mechanisms, runtime control state, mechanism parameters, and soft switching. |
 | `adaptive_demo` / `demo_all` | Teaching demo | Legacy dispatcher across teaching allocators for policy demonstration and mixed-ownership stress tests. |
 | `libc` / `glibc` | Baseline | System allocator for comparison in tools. |
 
@@ -57,11 +57,10 @@ flowchart TB
     Lab --> JE["jemalloc_like"]
     Lab --> MI["mimalloc_like"]
 
-    Adaptive --> Arch["Architecture policy<br/>windowed switching"]
-    Adaptive --> Params["Parameter policy<br/>versioned config"]
-    Arch --> Small["SmallObject architecture<br/>16B classes"]
-    Arch --> Medium["MediumObject architecture<br/>1KiB classes"]
-    Arch --> Large["LargeObject architecture<br/>direct mmap"]
+    Adaptive --> Control["Adaptive Control State<br/>mechanism choices + parameters + safety"]
+    Control --> Small["SmallObject mechanism<br/>page + size class"]
+    Control --> Medium["MediumObject mechanism<br/>span + class"]
+    Control --> Large["LargeObject mechanism<br/>direct mmap"]
 ```
 
 Public allocation calls still use one API surface. New allocations choose a mode through `MY_MALLOC_MODE`, while `free`/`realloc` route by pointer ownership metadata so objects return to the allocator that created them.
@@ -140,22 +139,22 @@ MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_PARAM_POLICY=static MY_MALLOC_ADAPTIV
 MY_MALLOC_MODE=adaptive_demo MY_MALLOC_ADAPTIVE_POLICY=bandit LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 ```
 
-`MY_MALLOC_MODE=adaptive` is a standalone adaptive allocator backend. Its architecture policy switches only adaptive-internal architectures and does not default to routing through the teaching allocators. Baseline architecture policies include `heuristic`, `fixed:small`, `fixed:medium`, `fixed:large`, and `round_robin`; telemetry-driven policies include `epsilon_greedy`, `ucb1`, and `thompson_sampling`. Parameter policies are selected with `MY_MALLOC_ADAPTIVE_PARAM_POLICY=static|heuristic|coordinate_bandit|bayesian_offline`. The old demonstration behavior that dispatches across teaching allocators is available as `adaptive_demo` / `demo_all`.
+`MY_MALLOC_MODE=adaptive` is a standalone adaptive allocator backend. It controls adaptive-internal mechanisms and does not route through the teaching allocators. `SmallObject`, `MediumObject`, and `LargeObject` are base allocation mechanisms, not complete allocator architectures. The current compatibility policies (`heuristic`, `fixed:*`, `round_robin`, `epsilon_greedy`, `ucb1`, `thompson_sampling`) mostly choose or bias those base mechanisms. Parameter policies are selected with `MY_MALLOC_ADAPTIVE_PARAM_POLICY=static|heuristic|coordinate_bandit|bayesian_offline`. The old demonstration behavior that dispatches across teaching allocators is available as `adaptive_demo` / `demo_all`.
 
 Important adaptive knobs:
 
 | Env var | Meaning |
 |---|---|
-| `MY_MALLOC_ADAPTIVE_POLICY` | Architecture policy. |
+| `MY_MALLOC_ADAPTIVE_POLICY` | Compatibility mechanism-selection policy. |
 | `MY_MALLOC_ADAPTIVE_PARAM_POLICY` | Parameter tuning policy. |
-| `MY_MALLOC_ADAPTIVE_ARCH_WINDOW` | Allocation window before telemetry policies can switch architecture for a size band. |
+| `MY_MALLOC_ADAPTIVE_ARCH_WINDOW` | Legacy name for the mechanism-control window. |
 | `MY_MALLOC_ADAPTIVE_PARAM_WINDOW` | Allocation window before parameter tuning runs. |
 | `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` | Initial small-object page size. |
 | `MY_MALLOC_ADAPTIVE_MEDIUM_SPAN_SIZE` | Initial medium-object span size. |
 | `MY_MALLOC_ADAPTIVE_LOCAL_BATCH` | Local-cache batch hint for future adaptive cache work. |
 | `MY_MALLOC_ADAPTIVE_EMPTY_CACHE_LIMIT` | Empty page/span cache limit before release. |
-| `MY_MALLOC_ADAPTIVE_COOLDOWN_WINDOWS` | Cooldown after profile/architecture switches. |
-| `MY_MALLOC_ADAPTIVE_PROFILE` | Initial profile: `balanced`, `low_latency`, `low_rss`, `large_heavy`, `cross_thread`. |
+| `MY_MALLOC_ADAPTIVE_COOLDOWN_WINDOWS` | Cooldown after mechanism preference changes. |
+| `MY_MALLOC_ADAPTIVE_PROFILE` | Initial control preset/objective: `balanced`, `low_latency`, `low_rss`, `large_heavy`, `cross_thread`. |
 
 Enable optional observability:
 
@@ -243,7 +242,7 @@ Full benchmark instructions and current results:
 
 ## Current Performance Snapshot
 
-The latest local benchmark sample was performed on May 6, 2026 with `bench_runner` after adding windowed architecture switching and the separate parameter tuning layer. It compares `libc` with selected adaptive configurations.
+The latest local benchmark sample was performed on May 6, 2026 with `bench_runner` after adding mechanism control, window stats, and parameter tuning. It compares `libc` with selected adaptive configurations.
 
 Micro profile highlights:
 
@@ -276,5 +275,5 @@ The results are useful for learning because they expose concrete design tradeoff
 - Cross-thread slab frees do not yet use owner-thread remote-free queues.
 - The size-class table is simple 16-byte spacing, not a production-tuned table.
 - Large allocation and extent management are simpler than jemalloc/tcmalloc/mimalloc.
-- The adaptive backend now has dedicated small pages, medium spans, windowed architecture switching, parameter tuning, ownership fast path, per-class locks, window stats, and conservative empty release. It still lacks real thread-local caches, remote-free queues, profile-specific schemas, and contextual ML/RL.
+- The adaptive backend now has dedicated small pages, medium spans, direct mmap, mechanism control, parameter tuning, ownership fast path, per-class locks, window stats, and conservative empty release. It still lacks real thread-local caches, remote-free queues, profile-specific schemas, and contextual ML/RL.
 - External benchmark coverage depends on local tools such as Redis, glibc benchtests, SQLite, clang, Z3, jemalloc, tcmalloc, and mimalloc.

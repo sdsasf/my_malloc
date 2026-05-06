@@ -1,7 +1,8 @@
 #pragma once
 // Independent adaptive allocator backend.
 // This is NOT a dispatcher over teaching allocators - it is a standalone
-// allocator with its own metadata, ownership, internal architectures, and policy.
+// allocator with its own metadata, ownership, base allocation mechanisms, and
+// runtime control state.
 
 #include <atomic>
 #include <cstddef>
@@ -11,7 +12,14 @@ namespace my_ptmalloc {
 
 struct AdaptivePage;
 
-// --- Internal strategy IDs -------------------------------------------------
+// --- Base allocation mechanism IDs -----------------------------------------
+//
+// The historical name AdaptiveStrategyId is kept for API/source compatibility.
+// These values are not complete allocator architectures. They identify the
+// base mechanisms used by the adaptive backend:
+// - SmallObject: page + size-class mechanism
+// - MediumObject: span + class mechanism
+// - LargeObject: direct mmap mechanism
 
 enum class AdaptiveStrategyId : uint8_t {
     SmallObject  = 1,   // size <= 1024
@@ -22,7 +30,7 @@ enum class AdaptiveStrategyId : uint8_t {
 // --- Policy kinds (adaptive-internal, NOT the old runtime AdaptivePolicyKind) -
 
 enum class AdaptiveInternalPolicy : uint8_t {
-    Heuristic        = 0,   // size-based architecture routing (default baseline)
+    Heuristic        = 0,   // size-based base-mechanism routing baseline
     FixedSmall       = 1,   // force SmallObject with safe fallback
     FixedMedium      = 2,   // force MediumObject with safe fallback
     FixedLarge       = 3,   // force LargeObject
@@ -53,7 +61,7 @@ static constexpr uint32_t ADAPTIVE_MAGIC = 0xADA9'B10C;  // "ADA-BLOC"
 
 struct AdaptiveHeader {
     uint32_t           magic;         // ADAPTIVE_MAGIC
-    AdaptiveStrategyId strategy;      // which internal strategy allocated this
+    AdaptiveStrategyId strategy;      // base mechanism that allocated this
     uint8_t            flags;         // bit 0: memalign allocation
     uint16_t           _pad;          // alignment padding
     uint32_t           config_version;// runtime config version used at allocation
@@ -74,11 +82,11 @@ static constexpr size_t ADAPTIVE_HDR_OFFSET = 80;
 
 struct AdaptiveObservation {
     size_t             requested_size;
-    AdaptiveStrategyId chosen_strategy;
+    AdaptiveStrategyId chosen_strategy; // chosen base mechanism
     AdaptiveInternalPolicy policy;
     uint64_t           live_bytes;
     uint64_t           mapped_bytes;
-    uint64_t           strategy_trials;
+    uint64_t           strategy_trials; // historical field name: mechanism trials
     uint64_t           strategy_successes;
     uint64_t           avg_alloc_latency_ns;
     uint64_t           pool_hits;
@@ -88,7 +96,7 @@ struct AdaptiveObservation {
     // Future: phase id, remote-free ratio, contention level, etc.
 };
 
-// --- Per-strategy stats ----------------------------------------------------
+// --- Per-mechanism stats ---------------------------------------------------
 
 struct AdaptiveStrategyStats {
     std::atomic<uint64_t> alloc_count{0};
@@ -117,7 +125,7 @@ struct AdaptiveStats {
     std::atomic<uint64_t> released_spans{0};
     std::atomic<uint64_t> release_unmapped_bytes{0};
 
-    // per-strategy
+    // per-mechanism; historical member name kept for compatibility
     static constexpr size_t NUM_STRATEGIES = 3;
     AdaptiveStrategyStats strategy[NUM_STRATEGIES]; // index 0=Small,1=Medium,2=Large
 
@@ -133,6 +141,7 @@ struct AdaptiveStatsSnapshot {
     uint64_t failure_count;
     uint64_t policy_decisions;
     uint64_t architecture_switches;
+    uint64_t mechanism_switches;      // alias for architecture_switches
     uint64_t parameter_decisions;
     uint64_t empty_pages;
     uint64_t empty_spans;
@@ -172,6 +181,23 @@ struct AdaptiveConfigSnapshot {
     AdaptiveProfileId profile;
 };
 
+struct AdaptiveControlStateSnapshot {
+    uint32_t version;
+    AdaptiveProfileId control_preset;
+    AdaptiveInternalPolicy mechanism_policy;
+    AdaptiveParameterPolicy parameter_policy;
+    uint32_t mechanism_window;
+    uint32_t parameter_window;
+    uint32_t cooldown_windows;
+    uint32_t empty_cache_limit;
+    uint32_t local_batch_size;
+    size_t small_page_size;
+    size_t medium_span_size;
+    bool empty_release_enabled;
+    bool large_path_preferred;
+    bool remote_free_reserved;
+};
+
 struct AdaptiveWindowSnapshot {
     uint64_t alloc_calls;
     uint64_t free_calls;
@@ -180,6 +206,7 @@ struct AdaptiveWindowSnapshot {
     uint64_t pool_hits[3];
     uint64_t pool_misses[3];
     uint64_t architecture_switches;
+    uint64_t mechanism_switches;
     uint64_t parameter_decisions;
     uint64_t failure_count;
     int64_t live_bytes;
@@ -207,6 +234,7 @@ void adaptive_stats_reset() noexcept;
 [[nodiscard]] AdaptiveParameterPolicy adaptive_current_parameter_policy() noexcept;
 [[nodiscard]] const char* adaptive_parameter_policy_name(AdaptiveParameterPolicy p) noexcept;
 [[nodiscard]] AdaptiveConfigSnapshot adaptive_config_snapshot() noexcept;
+[[nodiscard]] AdaptiveControlStateSnapshot adaptive_control_state_snapshot() noexcept;
 [[nodiscard]] AdaptiveWindowSnapshot adaptive_window_snapshot() noexcept;
 [[nodiscard]] const char* adaptive_profile_name(AdaptiveProfileId p) noexcept;
 
