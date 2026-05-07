@@ -339,12 +339,13 @@ ctest --test-dir build --output-on-failure
 MY_MALLOC_ADAPTIVE_MODE=throughput_cache ./build/bench_runner --strategy adaptive --bench throughput_server --json
 MY_MALLOC_ADAPTIVE_MODE=deterministic_latency ./build/bench_runner --strategy adaptive --bench realtime_latency --json
 MY_MALLOC_ADAPTIVE_MODE=compact_rss ./build/bench_runner --strategy adaptive --bench memory_constrained --json
+MY_MALLOC_ADAPTIVE_MODE=fragmentation_stable ./build/bench_runner --strategy adaptive --bench fragmentation --json
 MY_MALLOC_ADAPTIVE_MODE=cross_thread ./build/bench_runner --strategy adaptive --bench producer_consumer --json
 MY_MALLOC_ADAPTIVE_MODE=large_object ./build/bench_runner --strategy adaptive --bench large_streaming --json
 MY_MALLOC_ADAPTIVE_MODE=hardened_debug ./build/bench_runner --strategy adaptive --bench debug_safety --json
 ```
 
-JSON output includes mode telemetry, shared-memory storage telemetry, and selector features. Current measurements should be interpreted by mode (`current_mode`, per-mode counts), memory substrate behavior (`storage_allocs`, `pool_hits`, `pool_misses`, `release_unmapped_bytes`), and feature ratios (`remote_free_ratio`, `large_bytes_ratio`, `fragmentation_estimate`, `slow_path_ratio`, `mapped_live_ratio`).
+JSON output includes mode telemetry, shared-memory storage telemetry, and selector features. Current measurements should be interpreted by mode (`current_mode`, per-mode counts), memory substrate behavior (`storage_allocs`, `pool_hits`, `pool_misses`, `release_unmapped_bytes`), and feature ratios (`remote_free_ratio`, `large_bytes_ratio`, `fragmentation_estimate`, `slow_path_ratio`, `mapped_live_ratio`). The intended comparisons are workload-specific: throughput mode should favor ops/sec on local short-lived allocations, compact mode should favor retained/mapped memory after phase changes, fragmentation-stable mode should reduce mapped/live and internal waste on mixed medium sizes, cross-thread mode should expose remote-free telemetry and owner reuse, large-object mode should isolate direct mappings, and hardened mode should report safety diagnostics.
 
 External `mimalloc-bench glibc-simple` was also run through LD_PRELOAD for all modes:
 

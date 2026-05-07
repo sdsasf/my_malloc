@@ -152,9 +152,9 @@ void adaptive_telemetry_on_mode_switch() noexcept {
 }
 
 WorkloadFeatures adaptive_extract_window_features() noexcept {
-    // Phase 1 uses cumulative counters as a coarse window approximation. The
-    // interface is deliberately window-shaped so it can become a sliding delta
-    // without changing mode or selector APIs.
+    // The current selector uses cumulative counters as a coarse window
+    // approximation. The interface is deliberately window-shaped so it can
+    // become a sliding delta without changing mode or selector APIs.
     WorkloadFeatures f{};
     f.alloc_calls = g_stats.malloc_calls.load(std::memory_order_relaxed);
     f.free_calls = g_stats.free_calls.load(std::memory_order_relaxed);

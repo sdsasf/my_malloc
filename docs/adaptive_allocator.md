@@ -50,13 +50,13 @@ Modes do not directly mutate page/span/mmap internals.
 | Mode | AllocationPlan | ReleaseDecision | Current status |
 |---|---|---|---|
 | `Balanced` | `Auto`, reuse enabled, default empty keep limit | return to central pool | Stable baseline |
-| `ThroughputCache` | size-class/span preference, reuse, thread-cache semantic hook, larger batch, higher keep limit | cache | Real TLS cache is TODO |
-| `DeterministicLatency` | `Auto`, reuse, moderate batch, avoids aggressive release | return to central pool | Stable reuse policy; p99 sampler TODO |
-| `CompactRSS` | low-RSS, no thread cache, direct map for large objects, keep limit 0 | purge or unmap | Aggressive reclaim implemented |
-| `FragmentationStable` | `Auto`, reuse, low keep limit, fragmentation telemetry hook | return to central pool | Size-class rebalance TODO |
-| `CrossThreadMessage` | `Auto`, owner/remote-free semantic hook | return to central pool | Remote-free telemetry implemented; queue TODO |
+| `ThroughputCache` | size-class/span preference, reuse, real TLS cache, larger batch, higher keep limit | cache | Thread-local cache implemented for size-class pages and spans |
+| `DeterministicLatency` | `Auto`, reuse, bounded TLS cache smaller than throughput mode, avoids aggressive release | cache with low per-bin limits | Stable hot-path reuse implemented; sampled p99 telemetry is future work |
+| `CompactRSS` | low-RSS, no thread cache, direct map for large objects, keep limit 0 | targeted purge/unmap of the emptied page/span | Fine-grained empty page/span reclaim implemented |
+| `FragmentationStable` | `Auto` for small objects, direct-map isolation for objects >= 32 KiB or high size-class waste, low keep limit | unmap isolated direct mappings; otherwise return to central pool | Waste-aware medium routing implemented; full adaptive table rebalance is future work |
+| `CrossThreadMessage` | `Auto`, owner-aware remote-free queue, owner-side drain into TLS cache | return to central pool | Remote-free queue implemented for pooled objects |
 | `LargeObjectStreaming` | direct map for objects >= 4 KiB, size-class for small | unmap direct mappings | Large object isolation implemented |
-| `HardenedDebug` | direct map, no reuse, debug redzone/quarantine intent | quarantine with poison/check hooks | Header checks, counters, poison/quarantine mapping retention implemented; full redzone TODO |
+| `HardenedDebug` | direct map, no reuse, header canary, tail redzone, quarantine intent | quarantine with poison/redzone checks | Header checks, double-free/invalid-free counters, poison, quarantine retention, and tail redzone validation implemented |
 
 ## Runtime Telemetry and Selector
 
@@ -94,7 +94,7 @@ Telemetry tracks:
 - slow-path ratio;
 - safety error rate.
 
-Phase 1 computes these from cumulative counters as a coarse window approximation. The API is window-shaped so it can become a true sliding-window delta without changing mode policy code.
+The current selector computes these from cumulative counters as a coarse window approximation. The API is window-shaped so it can become a true sliding-window delta without changing mode policy code.
 
 ## Selector Rules
 
@@ -162,6 +162,11 @@ Implemented:
 - allocation-time `mode_id`;
 - shared ownership table and registry;
 - size-class pages, spans, direct mappings;
+- thread-local cache bins for size-class pages and spans;
+- owner-keyed remote-free queues with owner-side drain;
+- compact RSS targeted reclaim of the exact empty page/span on free;
+- fragmentation-stable direct-map isolation for high-waste medium sizes;
+- hardened debug header cookie and tail redzone validation;
 - per-mode and per-storage stats;
 - remote-free telemetry;
 - rule selector with window/cooldown/hysteresis;
@@ -171,11 +176,11 @@ Implemented:
 
 Future work:
 
-- real thread-local cache service;
-- bounded remote-free queue and owner-aware reclaim;
-- fragmentation-stable size-class table policy;
+- dynamic tcache sizing and batch refill/drain tuning;
+- larger remote-free table and abandoned-owner cleanup;
+- fragmentation-stable adaptive size-class table rebalancing beyond the current waste-aware routing;
 - sampled p95/p99 latency;
-- full redzone/canary validation;
+- front redzone/page-guard debug variants;
 - true sliding-window feature deltas.
 
 ## Commands

@@ -48,6 +48,7 @@ struct AdaptiveHeader {
     AdaptivePage*     owner_page;
     uint64_t          owner_thread;
     uint64_t          alloc_epoch;
+    uint64_t          debug_cookie;
 };
 
 static_assert(sizeof(AdaptiveHeader) <= 112, "AdaptiveHeader must fit in the fixed offset");

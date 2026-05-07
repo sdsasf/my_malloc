@@ -56,11 +56,11 @@ static ReleaseDecision throughput_free(AdaptiveHeader*) noexcept {
 
 static AllocationPlan latency_allocate(size_t, size_t alignment) noexcept {
     return make_plan(alignment > 16 ? StoragePreference::DirectMap : StoragePreference::Auto,
-                     false, true, false, false, false, false, 16, 4);
+                     true, true, false, false, false, false, 8, 4);
 }
 
 static ReleaseDecision latency_free(AdaptiveHeader*) noexcept {
-    return make_release(ReleaseAction::ReturnToCentralPool);
+    return make_release(ReleaseAction::Cache);
 }
 
 static AllocationPlan compact_allocate(size_t size, size_t alignment) noexcept {
@@ -78,20 +78,37 @@ static ReleaseDecision compact_free(AdaptiveHeader* hdr) noexcept {
     return make_release(ReleaseAction::Purge);
 }
 
-static AllocationPlan fragmentation_allocate(size_t, size_t alignment) noexcept {
-    return make_plan(alignment > 16 ? StoragePreference::DirectMap : StoragePreference::Auto,
-                     false, true, false, false, false, false, 8, 1);
+static size_t align_up_policy(size_t value, size_t alignment) noexcept {
+    return (value + alignment - 1) & ~(alignment - 1);
 }
 
-static ReleaseDecision fragmentation_free(AdaptiveHeader*) noexcept {
+static bool fragmentation_prefers_direct(size_t size, size_t alignment) noexcept {
+    if (alignment > 16 || size >= 32 * 1024) return true;
+    if (size <= 1024 || size > 64 * 1024) return false;
+    size_t rounded = align_up_policy(size, 1024);
+    if (rounded <= size) return false;
+    size_t waste = rounded - size;
+    return waste * 100 >= size * 20;
+}
+
+static AllocationPlan fragmentation_allocate(size_t size, size_t alignment) noexcept {
+    StoragePreference storage = fragmentation_prefers_direct(size, alignment)
+        ? StoragePreference::DirectMap
+        : StoragePreference::Auto;
+    return make_plan(storage, false, true, false, false, false,
+                     storage == StoragePreference::DirectMap, 8, 1);
+}
+
+static ReleaseDecision fragmentation_free(AdaptiveHeader* hdr) noexcept {
+    if (hdr && hdr->storage == AdaptiveStorageId::DirectMap) {
+        return make_release(ReleaseAction::Unmap);
+    }
     return make_release(ReleaseAction::ReturnToCentralPool);
 }
 
 static AllocationPlan cross_thread_allocate(size_t, size_t alignment) noexcept {
-    // TODO: route remote frees through owner-aware queues once the queue service
-    // exists. The plan keeps the semantic hook while using shared pools today.
     return make_plan(alignment > 16 ? StoragePreference::DirectMap : StoragePreference::Auto,
-                     false, true, false, false, false, false, 16, 2);
+                     true, true, false, false, false, false, 16, 2);
 }
 
 static ReleaseDecision cross_thread_free(AdaptiveHeader*) noexcept {

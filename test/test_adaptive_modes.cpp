@@ -8,6 +8,7 @@
 using my_ptmalloc::ADAPTIVE_HDR_OFFSET;
 using my_ptmalloc::AdaptiveHeader;
 using my_ptmalloc::AdaptiveModeId;
+using my_ptmalloc::AdaptiveStorageId;
 
 static int fail(const char* msg) {
     std::fprintf(stderr, "%s\n", msg);
@@ -98,6 +99,92 @@ static int hardened_debug() {
     return 0;
 }
 
+static int hardened_redzone() {
+    my_ptmalloc::adaptive_set_mode(AdaptiveModeId::HardenedDebug);
+    void* p = my_ptmalloc::adaptive_malloc(64);
+    if (!p || hdr(p)->mode_id != AdaptiveModeId::HardenedDebug) {
+        return fail("hardened redzone allocation failed");
+    }
+    static_cast<unsigned char*>(p)[my_ptmalloc::adaptive_usable_size(p)] = 0xEE;
+    my_ptmalloc::adaptive_free(p);
+    auto s = my_ptmalloc::adaptive_stats_snapshot();
+    if (s.header_corruption_count == 0) return fail("hardened_debug did not detect redzone corruption");
+    return 0;
+}
+
+static int throughput_tcache() {
+    my_ptmalloc::adaptive_set_mode(AdaptiveModeId::ThroughputCache);
+    void* p = my_ptmalloc::adaptive_malloc(64);
+    if (!p) return fail("throughput tcache allocation failed");
+    my_ptmalloc::adaptive_free(p);
+    void* q = my_ptmalloc::adaptive_malloc(64);
+    if (q != p) return fail("throughput tcache did not reuse the thread-local object");
+    my_ptmalloc::adaptive_free(q);
+    return 0;
+}
+
+static int cross_thread_remote_queue() {
+    my_ptmalloc::adaptive_set_mode(AdaptiveModeId::CrossThreadMessage);
+    void* p = my_ptmalloc::adaptive_malloc(64);
+    if (!p || hdr(p)->mode_id != AdaptiveModeId::CrossThreadMessage) {
+        return fail("cross-thread allocation failed");
+    }
+    std::thread t([&] {
+        my_ptmalloc::adaptive_free(p);
+    });
+    t.join();
+    void* q = my_ptmalloc::adaptive_malloc(64);
+    if (q != p) return fail("remote-free queue did not return object to owner thread");
+    my_ptmalloc::adaptive_free(q);
+    auto s = my_ptmalloc::adaptive_stats_snapshot();
+    if (s.remote_free_ratio <= 0.0) return fail("remote queue test did not record remote free");
+    return 0;
+}
+
+static int deterministic_latency_cache() {
+    my_ptmalloc::adaptive_set_mode(AdaptiveModeId::DeterministicLatency);
+    void* p = my_ptmalloc::adaptive_malloc(64);
+    if (!p || hdr(p)->mode_id != AdaptiveModeId::DeterministicLatency) {
+        return fail("deterministic latency allocation failed");
+    }
+    my_ptmalloc::adaptive_free(p);
+    void* q = my_ptmalloc::adaptive_malloc(64);
+    if (q != p) return fail("deterministic latency bounded cache did not reuse the object");
+    my_ptmalloc::adaptive_free(q);
+    return 0;
+}
+
+static int fragmentation_stable_storage() {
+    my_ptmalloc::adaptive_set_mode(AdaptiveModeId::FragmentationStable);
+    void* p = my_ptmalloc::adaptive_malloc(48 * 1024);
+    if (!p || hdr(p)->mode_id != AdaptiveModeId::FragmentationStable) {
+        return fail("fragmentation-stable allocation failed");
+    }
+    if (hdr(p)->storage != AdaptiveStorageId::DirectMap) {
+        return fail("fragmentation-stable mode did not isolate large medium allocation");
+    }
+    my_ptmalloc::adaptive_free(p);
+
+    void* q = my_ptmalloc::adaptive_malloc(1537);
+    if (!q || hdr(q)->storage != AdaptiveStorageId::DirectMap) {
+        return fail("fragmentation-stable mode did not isolate high-waste medium allocation");
+    }
+    my_ptmalloc::adaptive_free(q);
+    return 0;
+}
+
+static int compact_precise_reclaim() {
+    my_ptmalloc::adaptive_set_mode(AdaptiveModeId::CompactRSS);
+    void* p = my_ptmalloc::adaptive_malloc(64);
+    if (!p || hdr(p)->mode_id != AdaptiveModeId::CompactRSS) {
+        return fail("compact reclaim allocation failed");
+    }
+    my_ptmalloc::adaptive_free(p);
+    auto s = my_ptmalloc::adaptive_stats_snapshot();
+    if (s.released_pages == 0) return fail("compact_rss did not reclaim the emptied size-class page");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     const char* mode = argc > 1 ? argv[1] : "soft_switch";
     if (std::strcmp(mode, "balanced") == 0) return fixed_mode_smoke(AdaptiveModeId::Balanced);
@@ -105,6 +192,12 @@ int main(int argc, char** argv) {
     if (std::strcmp(mode, "compact_rss") == 0) return fixed_mode_smoke(AdaptiveModeId::CompactRSS);
     if (std::strcmp(mode, "large_object") == 0) return fixed_mode_smoke(AdaptiveModeId::LargeObjectStreaming);
     if (std::strcmp(mode, "hardened_debug") == 0) return hardened_debug();
+    if (std::strcmp(mode, "hardened_redzone") == 0) return hardened_redzone();
+    if (std::strcmp(mode, "throughput_tcache") == 0) return throughput_tcache();
+    if (std::strcmp(mode, "remote_queue") == 0) return cross_thread_remote_queue();
+    if (std::strcmp(mode, "deterministic_cache") == 0) return deterministic_latency_cache();
+    if (std::strcmp(mode, "fragmentation_storage") == 0) return fragmentation_stable_storage();
+    if (std::strcmp(mode, "compact_reclaim") == 0) return compact_precise_reclaim();
     if (std::strcmp(mode, "soft_switch") == 0) return soft_switch();
     if (std::strcmp(mode, "remote_selector") == 0) return remote_selector();
     if (std::strcmp(mode, "large_selector") == 0) return large_selector();

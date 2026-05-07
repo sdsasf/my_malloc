@@ -61,6 +61,42 @@ add_test(NAME adaptive_mode_soft_switch
          MY_MALLOC_ADAPTIVE_MODE=balanced
          MY_MALLOC_ADAPTIVE_MODE_SELECTOR=manual
          $<TARGET_FILE:test_adaptive_modes> soft_switch)
+add_test(NAME adaptive_throughput_tcache
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_MODE=adaptive
+         MY_MALLOC_ADAPTIVE_MODE=throughput_cache
+         MY_MALLOC_ADAPTIVE_MODE_SELECTOR=manual
+         $<TARGET_FILE:test_adaptive_modes> throughput_tcache)
+add_test(NAME adaptive_cross_thread_remote_queue
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_MODE=adaptive
+         MY_MALLOC_ADAPTIVE_MODE=cross_thread
+         MY_MALLOC_ADAPTIVE_MODE_SELECTOR=manual
+         $<TARGET_FILE:test_adaptive_modes> remote_queue)
+add_test(NAME adaptive_deterministic_latency_cache
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_MODE=adaptive
+         MY_MALLOC_ADAPTIVE_MODE=deterministic_latency
+         MY_MALLOC_ADAPTIVE_MODE_SELECTOR=manual
+         $<TARGET_FILE:test_adaptive_modes> deterministic_cache)
+add_test(NAME adaptive_fragmentation_stable_storage
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_MODE=adaptive
+         MY_MALLOC_ADAPTIVE_MODE=fragmentation_stable
+         MY_MALLOC_ADAPTIVE_MODE_SELECTOR=manual
+         $<TARGET_FILE:test_adaptive_modes> fragmentation_storage)
+add_test(NAME adaptive_compact_precise_reclaim
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_MODE=adaptive
+         MY_MALLOC_ADAPTIVE_MODE=compact_rss
+         MY_MALLOC_ADAPTIVE_MODE_SELECTOR=manual
+         $<TARGET_FILE:test_adaptive_modes> compact_reclaim)
+add_test(NAME adaptive_hardened_redzone
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_MODE=adaptive
+         MY_MALLOC_ADAPTIVE_MODE=hardened_debug
+         MY_MALLOC_ADAPTIVE_DEBUG_MODE=1
+         $<TARGET_FILE:test_adaptive_modes> hardened_redzone)
 add_test(NAME adaptive_selector_remote_free
          COMMAND ${CMAKE_COMMAND} -E env
          MY_MALLOC_MODE=adaptive

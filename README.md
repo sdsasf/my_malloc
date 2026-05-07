@@ -63,7 +63,7 @@ flowchart TB
     Selector --> Modes
 ```
 
-Public allocation calls still use one API surface. New allocations choose a mode through `MY_MALLOC_MODE`, while `free`/`realloc` route by pointer ownership metadata so objects return to the allocator that created them.
+Public allocation calls still use one API surface. `MY_MALLOC_MODE` chooses the allocator backend. Inside the `adaptive` backend, new allocations use the active `AdaptiveMode`, while `free`/`realloc`/`usable_size` route by allocation-time metadata so objects return through the mode that created them.
 
 For the detailed system architecture, read [docs/system_architecture.md](docs/system_architecture.md).
 
@@ -249,5 +249,5 @@ Full benchmark instructions and current results:
 - Cross-thread slab frees do not yet use owner-thread remote-free queues.
 - The size-class table is simple 16-byte spacing, not a production-tuned table.
 - Large allocation and extent management are simpler than jemalloc/tcmalloc/mimalloc.
-- The adaptive backend now has shared memory services, `AllocationPlan` / `ReleaseDecision` mode policy, allocation-time `mode_id`, owner-thread telemetry, rule-based soft switching, and per-mode stats. It still lacks real thread-local caches, remote-free queues, fragmentation-stable size-class policy, sampled p99 latency, and full redzone support.
+- The adaptive backend now has shared memory services, `AllocationPlan` / `ReleaseDecision` mode policy, allocation-time `mode_id`, mode-specific thread-local cache limits, owner-keyed remote-free queues, compact targeted reclaim, fragmentation-stable waste-aware medium routing, hardened debug canary/redzone checks, owner-thread telemetry, rule-based soft switching, and per-mode stats. It still lacks dynamic tcache tuning, abandoned-owner cleanup, adaptive size-class-table rebalancing, sampled p99 latency, and front-redzone/page-guard debug variants.
 - External benchmark coverage depends on local tools such as Redis, glibc benchtests, SQLite, clang, Z3, jemalloc, tcmalloc, and mimalloc.
