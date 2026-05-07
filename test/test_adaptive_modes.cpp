@@ -1,4 +1,5 @@
 #include "my_ptmalloc/adaptive_allocator.h"
+#include "my_ptmalloc/adaptive_telemetry.h"
 
 #include <cstdio>
 #include <cstring>
@@ -61,15 +62,17 @@ static int remote_selector() {
         for (void* p : ptrs) my_ptmalloc::adaptive_free(p);
     });
     t.join();
+    auto after_remote = my_ptmalloc::adaptive_stats_snapshot();
+    if (after_remote.remote_free_ratio <= 0.0) return fail("remote-free telemetry was not recorded");
+    if (my_ptmalloc::adaptive_current_mode() != AdaptiveModeId::CrossThreadMessage) {
+        return fail("remote-free window did not select cross_thread mode");
+    }
     for (int i = 0; i < 256; ++i) {
         void* p = my_ptmalloc::adaptive_malloc(64);
         my_ptmalloc::adaptive_free(p);
     }
     auto s = my_ptmalloc::adaptive_stats_snapshot();
     if (s.remote_free_ratio <= 0.0) return fail("remote-free telemetry was not recorded");
-    if (my_ptmalloc::adaptive_current_mode() != AdaptiveModeId::CrossThreadMessage) {
-        return fail("remote-free workload did not select cross_thread mode");
-    }
     return 0;
 }
 
@@ -185,6 +188,36 @@ static int compact_precise_reclaim() {
     return 0;
 }
 
+static int window_delta_features() {
+    my_ptmalloc::adaptive_stats_reset();
+    my_ptmalloc::adaptive_set_mode(AdaptiveModeId::Balanced);
+    void* p = my_ptmalloc::adaptive_malloc(64);
+    if (!p) return fail("window delta allocation failed");
+    my_ptmalloc::adaptive_free(p);
+
+    auto first = my_ptmalloc::adaptive_extract_window_features();
+    if (first.alloc_calls == 0 || first.requested_bytes == 0) {
+        return fail("first window did not include allocation delta");
+    }
+
+    auto snapshot = my_ptmalloc::adaptive_stats_snapshot();
+    if (snapshot.malloc_calls == 0) return fail("snapshot lost cumulative malloc count");
+
+    auto second = my_ptmalloc::adaptive_extract_window_features();
+    if (second.alloc_calls != 0 || second.requested_bytes != 0) {
+        return fail("second window repeated allocation counters");
+    }
+
+    void* q = my_ptmalloc::adaptive_malloc(128);
+    if (!q) return fail("second window allocation failed");
+    my_ptmalloc::adaptive_free(q);
+    auto third = my_ptmalloc::adaptive_extract_window_features();
+    if (third.alloc_calls == 0 || third.requested_bytes < 128) {
+        return fail("third window did not advance after new allocation");
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
     const char* mode = argc > 1 ? argv[1] : "soft_switch";
     if (std::strcmp(mode, "balanced") == 0) return fixed_mode_smoke(AdaptiveModeId::Balanced);
@@ -198,6 +231,7 @@ int main(int argc, char** argv) {
     if (std::strcmp(mode, "deterministic_cache") == 0) return deterministic_latency_cache();
     if (std::strcmp(mode, "fragmentation_storage") == 0) return fragmentation_stable_storage();
     if (std::strcmp(mode, "compact_reclaim") == 0) return compact_precise_reclaim();
+    if (std::strcmp(mode, "window_delta") == 0) return window_delta_features();
     if (std::strcmp(mode, "soft_switch") == 0) return soft_switch();
     if (std::strcmp(mode, "remote_selector") == 0) return remote_selector();
     if (std::strcmp(mode, "large_selector") == 0) return large_selector();

@@ -27,15 +27,15 @@ AdaptiveModeId adaptive_select_mode(const WorkloadFeatures& f) noexcept {
     if (debug_forced() || f.safety_error_rate > 0.01) {
         return AdaptiveModeId::HardenedDebug;
     }
-    if (f.mapped_live_ratio > 8.0 && f.mapped_bytes > 4 * 1024 * 1024) {
-        return AdaptiveModeId::CompactRSS;
-    }
     if (f.remote_free_ratio > 0.20 &&
-        (f.remote_free_count + f.same_thread_free_count) > 64) {
+        (f.remote_free_count + f.same_thread_free_count) >= 64) {
         return AdaptiveModeId::CrossThreadMessage;
     }
     if (f.large_bytes_ratio > 0.50 && f.requested_bytes > 1024 * 1024) {
         return AdaptiveModeId::LargeObjectStreaming;
+    }
+    if (f.mapped_live_ratio > 8.0 && f.mapped_bytes > 4 * 1024 * 1024) {
+        return AdaptiveModeId::CompactRSS;
     }
     if (f.slow_path_ratio > 0.35 && f.alloc_calls > 256) {
         return AdaptiveModeId::DeterministicLatency;

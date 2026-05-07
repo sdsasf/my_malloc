@@ -94,7 +94,7 @@ Telemetry tracks:
 - slow-path ratio;
 - safety error rate.
 
-The current selector computes these from cumulative counters as a coarse window approximation. The API is window-shaped so it can become a true sliding-window delta without changing mode policy code.
+The selector extracts these as delta-window features. Hot-path telemetry keeps cumulative counters for snapshots and JSON output, while `adaptive_extract_window_features()` advances an internal baseline and returns only the activity since the previous extraction. Gauge-style fields such as live bytes and mapped bytes remain current values so mapped/live pressure is evaluated against the allocator's actual retained memory.
 
 ## Selector Rules
 
@@ -170,6 +170,7 @@ Implemented:
 - per-mode and per-storage stats;
 - remote-free telemetry;
 - rule selector with window/cooldown/hysteresis;
+- delta-window feature extraction for selector decisions;
 - compact RSS purge/unmap behavior;
 - large-object direct-map isolation;
 - hardened debug poison and quarantine mapping retention.
@@ -181,7 +182,7 @@ Future work:
 - fragmentation-stable adaptive size-class table rebalancing beyond the current waste-aware routing;
 - sampled p95/p99 latency;
 - front redzone/page-guard debug variants;
-- true sliding-window feature deltas.
+- configurable multi-window smoothing for noisy workloads.
 
 ## Commands
 

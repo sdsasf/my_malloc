@@ -4,6 +4,7 @@
 #include "my_ptmalloc/adaptive_runtime.h"
 
 #include <cmath>
+#include <mutex>
 
 namespace my_ptmalloc {
 
@@ -11,6 +12,29 @@ namespace {
 
 AdaptiveStats g_stats;
 std::atomic<uint64_t> g_size_histogram[8]{};
+
+struct TelemetryCounters {
+    uint64_t malloc_calls = 0;
+    uint64_t free_calls = 0;
+    uint64_t invalid_free_count = 0;
+    uint64_t double_free_count = 0;
+    uint64_t header_corruption_count = 0;
+    uint64_t slow_path_count = 0;
+    uint64_t mmap_count = 0;
+    uint64_t remote_free_count = 0;
+    uint64_t same_thread_free_count = 0;
+    uint64_t storage_alloc_count[AdaptiveStats::NUM_STORAGE_HELPERS]{};
+    uint64_t storage_requested_bytes[AdaptiveStats::NUM_STORAGE_HELPERS]{};
+    uint64_t storage_usable_bytes[AdaptiveStats::NUM_STORAGE_HELPERS]{};
+    uint64_t storage_pool_hits[AdaptiveStats::NUM_STORAGE_HELPERS]{};
+    uint64_t storage_pool_misses[AdaptiveStats::NUM_STORAGE_HELPERS]{};
+    uint64_t size_histogram[8]{};
+    uint64_t mapped_bytes = 0;
+    uint64_t live_bytes = 0;
+};
+
+std::mutex g_window_mutex;
+TelemetryCounters g_window_base;
 
 static size_t storage_index(AdaptiveStorageId id) noexcept {
     switch (id) {
@@ -34,6 +58,124 @@ static size_t size_histogram_index(size_t size) noexcept {
 
 static double ratio_u64(uint64_t num, uint64_t den) noexcept {
     return den == 0 ? 0.0 : static_cast<double>(num) / static_cast<double>(den);
+}
+
+static uint64_t nonnegative_i64(int64_t value) noexcept {
+    return value < 0 ? 0 : static_cast<uint64_t>(value);
+}
+
+static uint64_t delta_u64(uint64_t current, uint64_t base) noexcept {
+    return current >= base ? current - base : current;
+}
+
+static TelemetryCounters read_counters() noexcept {
+    TelemetryCounters c{};
+    c.malloc_calls = g_stats.malloc_calls.load(std::memory_order_relaxed);
+    c.free_calls = g_stats.free_calls.load(std::memory_order_relaxed);
+    c.invalid_free_count = g_stats.invalid_free_count.load(std::memory_order_relaxed);
+    c.double_free_count = g_stats.double_free_count.load(std::memory_order_relaxed);
+    c.header_corruption_count = g_stats.header_corruption_count.load(std::memory_order_relaxed);
+    c.slow_path_count = g_stats.slow_path_count.load(std::memory_order_relaxed);
+    c.mmap_count = g_stats.mmap_count.load(std::memory_order_relaxed);
+    c.remote_free_count = g_stats.remote_free_count.load(std::memory_order_relaxed);
+    c.same_thread_free_count = g_stats.same_thread_free_count.load(std::memory_order_relaxed);
+    c.mapped_bytes = nonnegative_i64(g_stats.mapped_bytes.load(std::memory_order_relaxed));
+    c.live_bytes = nonnegative_i64(g_stats.live_bytes.load(std::memory_order_relaxed));
+    for (size_t i = 0; i < AdaptiveStats::NUM_STORAGE_HELPERS; ++i) {
+        c.storage_alloc_count[i] = g_stats.storage[i].alloc_count.load(std::memory_order_relaxed);
+        c.storage_requested_bytes[i] = g_stats.storage[i].requested_bytes.load(std::memory_order_relaxed);
+        c.storage_usable_bytes[i] = g_stats.storage[i].usable_bytes.load(std::memory_order_relaxed);
+        c.storage_pool_hits[i] = g_stats.storage[i].pool_hits.load(std::memory_order_relaxed);
+        c.storage_pool_misses[i] = g_stats.storage[i].pool_misses.load(std::memory_order_relaxed);
+    }
+    for (size_t i = 0; i < 8; ++i) {
+        c.size_histogram[i] = g_size_histogram[i].load(std::memory_order_relaxed);
+    }
+    return c;
+}
+
+static TelemetryCounters delta_counters(const TelemetryCounters& current,
+                                        const TelemetryCounters& base) noexcept {
+    TelemetryCounters d{};
+    d.malloc_calls = delta_u64(current.malloc_calls, base.malloc_calls);
+    d.free_calls = delta_u64(current.free_calls, base.free_calls);
+    d.invalid_free_count = delta_u64(current.invalid_free_count, base.invalid_free_count);
+    d.double_free_count = delta_u64(current.double_free_count, base.double_free_count);
+    d.header_corruption_count = delta_u64(current.header_corruption_count, base.header_corruption_count);
+    d.slow_path_count = delta_u64(current.slow_path_count, base.slow_path_count);
+    d.mmap_count = delta_u64(current.mmap_count, base.mmap_count);
+    d.remote_free_count = delta_u64(current.remote_free_count, base.remote_free_count);
+    d.same_thread_free_count = delta_u64(current.same_thread_free_count, base.same_thread_free_count);
+    d.mapped_bytes = current.mapped_bytes;
+    d.live_bytes = current.live_bytes;
+    for (size_t i = 0; i < AdaptiveStats::NUM_STORAGE_HELPERS; ++i) {
+        d.storage_alloc_count[i] = delta_u64(current.storage_alloc_count[i], base.storage_alloc_count[i]);
+        d.storage_requested_bytes[i] =
+            delta_u64(current.storage_requested_bytes[i], base.storage_requested_bytes[i]);
+        d.storage_usable_bytes[i] = delta_u64(current.storage_usable_bytes[i], base.storage_usable_bytes[i]);
+        d.storage_pool_hits[i] = delta_u64(current.storage_pool_hits[i], base.storage_pool_hits[i]);
+        d.storage_pool_misses[i] = delta_u64(current.storage_pool_misses[i], base.storage_pool_misses[i]);
+    }
+    for (size_t i = 0; i < 8; ++i) {
+        d.size_histogram[i] = delta_u64(current.size_histogram[i], base.size_histogram[i]);
+    }
+    return d;
+}
+
+static WorkloadFeatures features_from_counters(const TelemetryCounters& c) noexcept {
+    WorkloadFeatures f{};
+    f.alloc_calls = c.malloc_calls;
+    f.free_calls = c.free_calls;
+    f.remote_free_count = c.remote_free_count;
+    f.same_thread_free_count = c.same_thread_free_count;
+    f.mapped_bytes = c.mapped_bytes;
+    f.live_bytes = c.live_bytes;
+
+    uint64_t requested = 0;
+    uint64_t usable = 0;
+    uint64_t hits = 0;
+    uint64_t misses = 0;
+    for (size_t i = 0; i < AdaptiveStats::NUM_STORAGE_HELPERS; ++i) {
+        requested += c.storage_requested_bytes[i];
+        usable += c.storage_usable_bytes[i];
+        hits += c.storage_pool_hits[i];
+        misses += c.storage_pool_misses[i];
+    }
+    uint64_t small_count = c.storage_alloc_count[storage_index(AdaptiveStorageId::SizeClass)];
+    uint64_t medium_count = c.storage_alloc_count[storage_index(AdaptiveStorageId::Span)];
+    uint64_t large_count = c.storage_alloc_count[storage_index(AdaptiveStorageId::DirectMap)];
+    uint64_t count_total = small_count + medium_count + large_count;
+    uint64_t large_bytes = c.storage_requested_bytes[storage_index(AdaptiveStorageId::DirectMap)];
+    uint64_t thread_frees = f.remote_free_count + f.same_thread_free_count;
+    uint64_t safety = c.invalid_free_count + c.double_free_count + c.header_corruption_count;
+    uint64_t slow = c.slow_path_count + c.mmap_count + misses;
+
+    f.requested_bytes = requested;
+    f.usable_bytes = usable;
+    f.small_object_ratio = ratio_u64(small_count, count_total);
+    f.medium_object_ratio = ratio_u64(medium_count, count_total);
+    f.large_object_ratio = ratio_u64(large_count, count_total);
+    f.large_bytes_ratio = ratio_u64(large_bytes, requested);
+    f.cache_hit_rate = ratio_u64(hits, hits + misses);
+    f.reuse_rate = f.cache_hit_rate;
+    f.remote_free_ratio = ratio_u64(f.remote_free_count, thread_frees);
+    f.mapped_live_ratio = ratio_u64(f.mapped_bytes, f.live_bytes);
+    f.retained_ratio = f.mapped_live_ratio;
+    f.internal_frag_ratio = usable > requested ? ratio_u64(usable - requested, requested) : 0.0;
+    f.external_frag_score = f.mapped_live_ratio > 1.0 ? f.mapped_live_ratio - 1.0 : 0.0;
+    f.slow_path_ratio = ratio_u64(slow, f.alloc_calls);
+    f.safety_error_rate = ratio_u64(safety, f.free_calls + f.alloc_calls);
+
+    uint64_t hist_total = 0;
+    for (size_t i = 0; i < 8; ++i) hist_total += c.size_histogram[i];
+    if (hist_total > 0) {
+        for (size_t i = 0; i < 8; ++i) {
+            if (c.size_histogram[i] == 0) continue;
+            double p = static_cast<double>(c.size_histogram[i]) / static_cast<double>(hist_total);
+            f.size_entropy -= p * (std::log(p) / std::log(2.0));
+        }
+    }
+    return f;
 }
 
 } // namespace
@@ -152,75 +294,11 @@ void adaptive_telemetry_on_mode_switch() noexcept {
 }
 
 WorkloadFeatures adaptive_extract_window_features() noexcept {
-    // The current selector uses cumulative counters as a coarse window
-    // approximation. The interface is deliberately window-shaped so it can
-    // become a sliding delta without changing mode or selector APIs.
-    WorkloadFeatures f{};
-    f.alloc_calls = g_stats.malloc_calls.load(std::memory_order_relaxed);
-    f.free_calls = g_stats.free_calls.load(std::memory_order_relaxed);
-    f.remote_free_count = g_stats.remote_free_count.load(std::memory_order_relaxed);
-    f.same_thread_free_count = g_stats.same_thread_free_count.load(std::memory_order_relaxed);
-    f.mapped_bytes = static_cast<uint64_t>(g_stats.mapped_bytes.load(std::memory_order_relaxed) < 0 ? 0 :
-        g_stats.mapped_bytes.load(std::memory_order_relaxed));
-    f.live_bytes = static_cast<uint64_t>(g_stats.live_bytes.load(std::memory_order_relaxed) < 0 ? 0 :
-        g_stats.live_bytes.load(std::memory_order_relaxed));
-
-    uint64_t requested = 0;
-    uint64_t usable = 0;
-    uint64_t hits = 0;
-    uint64_t misses = 0;
-    for (size_t i = 0; i < AdaptiveStats::NUM_STORAGE_HELPERS; ++i) {
-        requested += g_stats.storage[i].requested_bytes.load(std::memory_order_relaxed);
-        usable += g_stats.storage[i].usable_bytes.load(std::memory_order_relaxed);
-        hits += g_stats.storage[i].pool_hits.load(std::memory_order_relaxed);
-        misses += g_stats.storage[i].pool_misses.load(std::memory_order_relaxed);
-    }
-    uint64_t small_count = g_stats.storage[storage_index(AdaptiveStorageId::SizeClass)]
-        .alloc_count.load(std::memory_order_relaxed);
-    uint64_t medium_count = g_stats.storage[storage_index(AdaptiveStorageId::Span)]
-        .alloc_count.load(std::memory_order_relaxed);
-    uint64_t large_count = g_stats.storage[storage_index(AdaptiveStorageId::DirectMap)]
-        .alloc_count.load(std::memory_order_relaxed);
-    uint64_t count_total = small_count + medium_count + large_count;
-    uint64_t large_bytes = g_stats.storage[storage_index(AdaptiveStorageId::DirectMap)]
-        .requested_bytes.load(std::memory_order_relaxed);
-    uint64_t thread_frees = f.remote_free_count + f.same_thread_free_count;
-    uint64_t safety = g_stats.invalid_free_count.load(std::memory_order_relaxed) +
-        g_stats.double_free_count.load(std::memory_order_relaxed) +
-        g_stats.header_corruption_count.load(std::memory_order_relaxed);
-    uint64_t slow = g_stats.slow_path_count.load(std::memory_order_relaxed) +
-        g_stats.mmap_count.load(std::memory_order_relaxed) + misses;
-
-    f.requested_bytes = requested;
-    f.usable_bytes = usable;
-    f.small_object_ratio = ratio_u64(small_count, count_total);
-    f.medium_object_ratio = ratio_u64(medium_count, count_total);
-    f.large_object_ratio = ratio_u64(large_count, count_total);
-    f.large_bytes_ratio = ratio_u64(large_bytes, requested);
-    f.cache_hit_rate = ratio_u64(hits, hits + misses);
-    f.reuse_rate = f.cache_hit_rate;
-    f.remote_free_ratio = ratio_u64(f.remote_free_count, thread_frees);
-    f.mapped_live_ratio = ratio_u64(f.mapped_bytes, f.live_bytes);
-    f.retained_ratio = f.mapped_live_ratio;
-    f.internal_frag_ratio = usable > requested ? ratio_u64(usable - requested, requested) : 0.0;
-    f.external_frag_score = f.mapped_live_ratio > 1.0 ? f.mapped_live_ratio - 1.0 : 0.0;
-    f.slow_path_ratio = ratio_u64(slow, f.alloc_calls);
-    f.safety_error_rate = ratio_u64(safety, f.free_calls + f.alloc_calls);
-
-    uint64_t hist_total = 0;
-    uint64_t hist[8]{};
-    for (size_t i = 0; i < 8; ++i) {
-        hist[i] = g_size_histogram[i].load(std::memory_order_relaxed);
-        hist_total += hist[i];
-    }
-    if (hist_total > 0) {
-        for (size_t i = 0; i < 8; ++i) {
-            if (hist[i] == 0) continue;
-            double p = static_cast<double>(hist[i]) / static_cast<double>(hist_total);
-            f.size_entropy -= p * (std::log(p) / std::log(2.0));
-        }
-    }
-    return f;
+    TelemetryCounters current = read_counters();
+    std::lock_guard<std::mutex> lock(g_window_mutex);
+    TelemetryCounters delta = delta_counters(current, g_window_base);
+    g_window_base = current;
+    return features_from_counters(delta);
 }
 
 AdaptiveStatsSnapshot adaptive_stats_snapshot() noexcept {
@@ -255,7 +333,7 @@ AdaptiveStatsSnapshot adaptive_stats_snapshot() noexcept {
     }
     s.live_bytes = g_stats.live_bytes.load(std::memory_order_relaxed);
     s.mapped_bytes = g_stats.mapped_bytes.load(std::memory_order_relaxed);
-    WorkloadFeatures f = adaptive_extract_window_features();
+    WorkloadFeatures f = features_from_counters(read_counters());
     s.remote_free_ratio = f.remote_free_ratio;
     s.size_entropy = f.size_entropy;
     s.large_bytes_ratio = f.large_bytes_ratio;
@@ -269,6 +347,10 @@ AdaptiveStatsSnapshot adaptive_stats_snapshot() noexcept {
 }
 
 void adaptive_stats_reset() noexcept {
+    {
+        std::lock_guard<std::mutex> lock(g_window_mutex);
+        g_window_base = TelemetryCounters{};
+    }
     g_stats.malloc_calls.store(0, std::memory_order_relaxed);
     g_stats.free_calls.store(0, std::memory_order_relaxed);
     g_stats.realloc_calls.store(0, std::memory_order_relaxed);

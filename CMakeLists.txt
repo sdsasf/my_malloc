@@ -97,6 +97,12 @@ add_test(NAME adaptive_hardened_redzone
          MY_MALLOC_ADAPTIVE_MODE=hardened_debug
          MY_MALLOC_ADAPTIVE_DEBUG_MODE=1
          $<TARGET_FILE:test_adaptive_modes> hardened_redzone)
+add_test(NAME adaptive_window_delta_features
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_MODE=adaptive
+         MY_MALLOC_ADAPTIVE_MODE=balanced
+         MY_MALLOC_ADAPTIVE_MODE_SELECTOR=manual
+         $<TARGET_FILE:test_adaptive_modes> window_delta)
 add_test(NAME adaptive_selector_remote_free
          COMMAND ${CMAKE_COMMAND} -E env
          MY_MALLOC_MODE=adaptive
