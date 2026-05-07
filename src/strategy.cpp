@@ -48,11 +48,6 @@ void adaptive_init() noexcept {
     my_malloc_init();
 }
 
-void adaptive_demo_init() noexcept {
-    allocator_lab_force_mode(AllocMode::AdaptiveDemo);
-    my_malloc_init();
-}
-
 void* libc_malloc_wrap(size_t size) noexcept {
     return std::malloc(size);
 }
@@ -183,23 +178,6 @@ StrategyDescriptor adaptive_strategy_descriptor() noexcept {
         "Independent multi-mode adaptive allocator with shared metadata and soft switching",
         StrategyVTable{
             adaptive_init,
-            noop_shutdown,
-            my_malloc,
-            my_free,
-            my_realloc,
-            my_malloc_usable_size,
-            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
-        },
-    };
-}
-
-StrategyDescriptor adaptive_demo_strategy_descriptor() noexcept {
-    return StrategyDescriptor{
-        STRATEGY_API_VERSION,
-        "adaptive_demo",
-        "Legacy demo: dispatches to teaching allocators",
-        StrategyVTable{
-            adaptive_demo_init,
             noop_shutdown,
             my_malloc,
             my_free,

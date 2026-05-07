@@ -1,56 +1,52 @@
 # System Architecture
 
-This document is the top-level architecture map for `my_malloc`. The project has two main parts:
+`my_malloc` has two major parts:
 
-1. An allocator lab that reproduces the core ideas of classic industrial allocators for learning.
-2. An independent `adaptive` allocator that is the project's experimental design.
+1. **Industrial allocator learning lab**: simplified `hybrid`, `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, and `mimalloc_like` implementations for studying allocator designs.
+2. **Adaptive allocator experimental backend**: an independent two-layer adaptive allocator with shared memory services, mode policies, runtime telemetry, and soft switching.
 
-The industrial-style allocators are not meant to be full production clones. They are simplified implementations that preserve the important mechanisms, data structures, and tradeoffs so they can be studied, visualized, validated, and benchmarked in one codebase. The `adaptive` allocator is different: it owns its own metadata, telemetry, mode table, allocation-time mode ids, and rule selector.
+The adaptive backend is not built by switching among the teaching allocators. It owns its own metadata, ownership tables, pages, spans, direct mappings, mode policies, and telemetry.
 
-## 1. Project Pillars
+## Project Map
 
 ```mermaid
 flowchart TB
     Project["my_malloc"]
-
-    Lab["Allocator lab<br/>industrial allocator ideas for learning"]
-    Adaptive["Adaptive allocator<br/>independent experimental backend"]
-    Harness["Common harness<br/>validation + benchmarks + LD_PRELOAD"]
-    Docs["Technical docs<br/>architecture + data structures + simplifications"]
+    Lab["Allocator learning lab"]
+    Adaptive["adaptive backend"]
+    Harness["validation + benchmarks + LD_PRELOAD"]
 
     Project --> Lab
     Project --> Adaptive
     Project --> Harness
-    Project --> Docs
 
-    Lab --> Hybrid["hybrid<br/>slab + ptmalloc fallback"]
+    Lab --> Hybrid["hybrid"]
     Lab --> PT["ptmalloc"]
     Lab --> TC["tcmalloc_like"]
     Lab --> JE["jemalloc_like"]
     Lab --> MI["mimalloc_like"]
 
-    Adaptive --> Runtime["Shared runtime<br/>header + ownership + stats"]
-    Runtime --> Modes["AdaptiveMode table"]
-    Modes --> Helpers["Internal storage helpers<br/>pooled pages/spans + direct mmap"]
+    Adaptive --> Services["Shared Memory Management Layer"]
+    Adaptive --> Modes["Adaptive Mode Policy Layer"]
+    Adaptive --> Selector["Runtime Telemetry + Selector"]
+    Modes --> Services
+    Selector --> Modes
 ```
 
-The allocator lab and the adaptive allocator are comparable through the same strategy API and benchmark tools, but they are not the same layer. `adaptive` does not default to calling the teaching allocators as backends.
+## Runtime Modes
 
-## 2. Modes
+`MY_MALLOC_MODE` selects the owner of new allocations:
 
-Runtime modes are selected with `MY_MALLOC_MODE`:
+| Mode | Role |
+|---|---|
+| `hybrid` | Teaching allocator: slab frontend plus ptmalloc-style fallback |
+| `ptmalloc` | Teaching ptmalloc-style backend |
+| `tcmalloc_like` | Teaching size-class/thread-cache/span allocator |
+| `jemalloc_like` | Teaching arena/run/tcache allocator |
+| `mimalloc_like` | Teaching per-thread heap/page allocator |
+| `adaptive` | Independent adaptive backend |
 
-| Mode | Role | Meaning |
-|---|---|---|
-| `hybrid` | Teaching allocator | Default mode. Small objects use the slab frontend; other allocations fall back to the ptmalloc-style path. |
-| `ptmalloc` | Teaching allocator | Chunk/bin/arena allocator for studying glibc ptmalloc ideas. |
-| `tcmalloc_like` | Teaching allocator | Size classes, thread caches, central free lists, and spans. |
-| `jemalloc_like` | Teaching allocator | Arenas, runs, size classes, and per-thread tcache. |
-| `mimalloc_like` | Teaching allocator | Per-thread heaps, page ownership, and remote-free queues. |
-| `adaptive` | Experimental allocator | Independent multi-mode adaptive backend with shared metadata and soft switching. |
-| `adaptive_demo` | Teaching demo | Legacy cross-teaching-allocator dispatcher, kept for demonstrations and mixed-ownership stress tests. |
-
-Tool strategies use the same names:
+Validation examples:
 
 ```bash
 ./build/allocator_validate --strategy hybrid
@@ -59,146 +55,79 @@ Tool strategies use the same names:
 ./build/allocator_validate --strategy jemalloc_like
 ./build/allocator_validate --strategy mimalloc_like
 ./build/allocator_validate --strategy adaptive
-./build/allocator_validate --strategy adaptive_demo
-./build/bench_runner --strategy adaptive --profile smoke --json
 ```
 
-## 3. Source Layout
+## Source Layout
 
 | Area | Main files |
 |---|---|
-| Public allocator API | `include/my_ptmalloc/my_malloc.h`, `src/my_malloc.cpp` |
+| Public API | `include/my_ptmalloc/my_malloc.h`, `src/my_malloc.cpp` |
 | LD_PRELOAD hooks | `include/my_ptmalloc/hooks.h`, `src/hooks.cpp` |
-| Runtime mode selection | `include/my_ptmalloc/allocator_lab.h`, `src/allocator_lab.cpp`, `include/my_ptmalloc/runtime_allocator.h`, `src/runtime_allocator.cpp` |
-| Strategy API and benchmark lab | `include/my_ptmalloc/strategy.h`, `src/strategy.cpp`, `tools/strategy_loader.h`, `tools/allocator_validate.cpp`, `tools/bench_runner.cpp` |
-| Hybrid slab frontend | `include/my_ptmalloc/slab_allocator.h`, `src/slab_allocator.cpp` |
-| ptmalloc-style backend | `include/my_ptmalloc/chunk.h`, `include/my_ptmalloc/arena.h`, `src/malloc_impl.cpp`, `src/free_impl.cpp`, `src/realloc_impl.cpp`, `src/arena_manager.cpp`, `src/*bins*.cpp` |
-| tcmalloc/jemalloc/mimalloc-like teaching allocators | `include/my_ptmalloc/family_allocators.h`, `src/family_allocators.cpp` |
-| Adaptive allocator | `include/my_ptmalloc/adaptive_allocator.h`, `src/adaptive_allocator.cpp` |
-| Observability | `include/my_ptmalloc/observer.h`, `src/observer.cpp`, allocator-lab stats/trace in `src/allocator_lab.cpp` |
+| Runtime lab mode selection | `include/my_ptmalloc/allocator_lab.h`, `src/allocator_lab.cpp`, `include/my_ptmalloc/runtime_allocator.h`, `src/runtime_allocator.cpp` |
+| Strategy API and tools | `include/my_ptmalloc/strategy.h`, `src/strategy.cpp`, `tools/strategy_loader.h`, `tools/allocator_validate.cpp`, `tools/bench_runner.cpp` |
+| Teaching allocators | `src/slab_allocator.cpp`, `src/malloc_impl.cpp`, `src/free_impl.cpp`, `src/realloc_impl.cpp`, `src/family_allocators.cpp` |
+| Adaptive facade | `include/my_ptmalloc/adaptive_allocator.h`, `src/adaptive_allocator.cpp` |
+| Adaptive shared types | `include/my_ptmalloc/adaptive_types.h` |
+| Adaptive shared memory layer | `include/my_ptmalloc/adaptive_services.h`, `src/adaptive_services.cpp` |
+| Adaptive mode policy layer | `include/my_ptmalloc/adaptive_mode.h`, `src/adaptive_modes.cpp` |
+| Adaptive telemetry | `include/my_ptmalloc/adaptive_telemetry.h`, `src/adaptive_telemetry.cpp` |
+| Adaptive selector/runtime | `include/my_ptmalloc/adaptive_selector.h`, `src/adaptive_selector.cpp`, `include/my_ptmalloc/adaptive_runtime.h`, `src/adaptive_runtime.cpp` |
 
-## 4. Allocation Flow
-
-Public API calls enter `my_malloc`, `my_free`, `my_realloc`, and related wrappers. The runtime mode determines which allocator owns a new allocation.
+## Allocation Flow
 
 ```mermaid
 flowchart TB
-    User["User program"]
-    Hooks["C hooks<br/>malloc/free/realloc/calloc/memalign"]
+    User["malloc/free/realloc"]
     API["my_malloc API"]
     Mode["MY_MALLOC_MODE"]
-
-    LabDispatch["Teaching allocator dispatch"]
-    Adaptive["adaptive backend"]
-
-    Hybrid["hybrid"]
-    PT["ptmalloc"]
-    TC["tcmalloc_like"]
-    JE["jemalloc_like"]
-    MI["mimalloc_like"]
-    Demo["adaptive_demo<br/>legacy lab dispatcher"]
-
-    User --> Hooks --> API --> Mode
-    Mode --> LabDispatch
-    Mode --> Adaptive
-    LabDispatch --> Hybrid
-    LabDispatch --> PT
-    LabDispatch --> TC
-    LabDispatch --> JE
-    LabDispatch --> MI
-    LabDispatch --> Demo
-```
-
-Important boundary:
-
-- `MY_MALLOC_MODE=adaptive` bypasses the teaching allocator dispatcher for new allocations and enters `src/adaptive_allocator.cpp`.
-- `MY_MALLOC_MODE=adaptive_demo` is the old educational dispatcher that can choose among teaching allocators.
-- `free` and `realloc` route by pointer ownership, not by the current allocation policy.
-
-## 5. Ownership Rules
-
-Every allocator family must be able to identify its own pointers on `free`, `realloc`, and `malloc_usable_size`.
-
-| Pointer owner | Identification method | Free/realloc handler |
-|---|---|---|
-| Adaptive pooled object | Page ownership filter, `AdaptiveHeader`, allocation-time `mode_id`, and `owner_page` pointer | Route through the allocation-time adaptive mode and return to the shared page/span free list |
-| Adaptive direct-mapped/aligned object | Page ownership filter, `AdaptiveHeader`, allocation-time `mode_id`, and mmap metadata | Route through the allocation-time adaptive mode and `munmap` when appropriate |
-| Teaching family page object | 64KB page table in `family_allocators.cpp` | tcmalloc/jemalloc/mimalloc-like handler |
-| Teaching family large block | large-pointer table in `family_allocators.cpp` | Family large free/realloc handler |
-| Hybrid slab object | 64KB slab lookup in `slab_allocator.cpp` | Slab free/realloc path |
-| ptmalloc chunk | chunk header plus arena/heap ownership | ptmalloc free/realloc path |
-| libc bootstrap pointer | early-bootstrap pointer tracking | libc free/realloc path |
-
-The key invariant is that an object is freed by the allocator that created it. Adaptive policy changes affect only future allocations; old adaptive objects return through their allocation-time metadata.
-
-## 6. Teaching Allocators
-
-The teaching allocators reproduce the essential mechanisms of well-known industrial allocators. They are implemented for learning and benchmarking, not as complete drop-in replacements for those production projects.
-
-| Allocator | Industrial idea being studied | Project simplification | Detailed doc |
-|---|---|---|---|
-| `hybrid` | Practical combination of a small-object frontend and a general chunk allocator | Slab frontend for small objects plus ptmalloc-style fallback | This overview plus [ptmalloc_design.md](ptmalloc_design.md) |
-| `ptmalloc` | Boundary-tag chunks, arenas, bins, tcache, top chunk, mmap fallback | Simplified large bins, lifecycle, mallopt, and realloc coverage | [ptmalloc_design.md](ptmalloc_design.md) |
-| `tcmalloc_like` | Size classes, thread caches, central free lists, spans | Uniform classes, fixed batches, no full page heap or per-CPU cache | [tcmalloc_design.md](tcmalloc_design.md) |
-| `jemalloc_like` | Arenas, runs, size classes, tcache, extent lifecycle concepts | Fixed arena count, simple 64KB runs, no extent decay/purging | [jemalloc_design.md](jemalloc_design.md) |
-| `mimalloc_like` | Per-thread heaps, page ownership, remote-free queues | Simplified page model, no full segment/abandoned-page lifecycle | [mimalloc_design.md](mimalloc_design.md) |
-
-Each detailed document should describe:
-
-- industrial background and core principle;
-- project design and data structures;
-- allocation/free flow;
-- simplifications compared with the real allocator;
-- benchmark scenarios that expose the allocator's strengths and weaknesses.
-
-## 7. Adaptive Allocator
-
-`adaptive` is the independent experimental allocator. It is not an alias for the teaching allocator dispatcher.
-
-```mermaid
-flowchart TB
-    Req["adaptive_malloc(size)"]
+    Lab["Teaching allocator path"]
+    Adaptive["adaptive facade"]
     Active["active AdaptiveMode"]
-    Selector["rule selector<br/>window + cooldown"]
-    Modes["mode table<br/>allocate/free/realloc/usable"]
-    Helpers["storage helpers<br/>pooled pages/spans + direct mmap"]
-    Header["AdaptiveHeader<br/>mode_id + owner thread + region"]
-    Registry["page ownership filter<br/>debug registry fallback"]
-    User["user pointer"]
+    Plan["AllocationPlan / ReleaseDecision"]
+    Services["Shared Memory Management Layer"]
+    Header["AdaptiveHeader mode_id"]
+    Selector["Telemetry + Selector"]
 
-    Req --> Active
-    Req --> Selector --> Active
-    Active --> Modes
-    Modes --> Helpers
-    Helpers --> Header
-    Header --> Registry
-    Header --> User
+    User --> API --> Mode
+    Mode --> Lab
+    Mode --> Adaptive
+    Adaptive --> Active --> Plan --> Services --> Header
+    Services --> Selector --> Active
 ```
 
-Adaptive design rules:
+Important invariants:
 
-- metadata, ownership, stats, and free routing are shared across adaptive modes;
-- `AdaptiveMode` is the top-level abstraction;
-- internal pooled/direct-mmap helpers are implementation details;
-- already allocated objects free through allocation-time metadata;
-- adaptive-owned pointers are never handed to ptmalloc, slab, or teaching-family free paths.
+- `MY_MALLOC_MODE=adaptive` enters the adaptive facade.
+- `adaptive_malloc` uses the current active mode policy.
+- `adaptive_free`, `adaptive_realloc`, and `adaptive_usable_size` use allocation-time `AdaptiveHeader::mode_id`.
+- Mode switches affect future allocations only.
+- Live objects are not migrated.
 
-Current modes are `balanced`, `throughput_cache`, `deterministic_latency`, `compact_rss`, `fragmentation_stable`, `cross_thread`, `large_object`, and `hardened_debug`. The rule selector uses adaptive-specific telemetry such as size entropy, large-byte ratio, mapped/live ratio, remote-free ratio, reuse rate, slow-path ratio, and safety counters.
+## Ownership
+
+Every allocator must identify its own pointers on `free`, `realloc`, and `malloc_usable_size`.
+
+| Pointer owner | Identification | Handler |
+|---|---|---|
+| Adaptive size-class page object | adaptive page table + `AdaptiveHeader` + `owner_page` | allocation-time adaptive mode policy + shared services |
+| Adaptive span object | adaptive page table + `AdaptiveHeader` + span metadata | allocation-time adaptive mode policy + shared services |
+| Adaptive direct mapping | adaptive page table + `AdaptiveHeader::region_base` | allocation-time adaptive mode policy + shared services |
+| Teaching family page object | family allocator page table | family allocator handler |
+| Hybrid slab object | slab lookup | slab handler |
+| ptmalloc chunk | chunk header and arena ownership | ptmalloc handler |
+| libc bootstrap pointer | bootstrap tracking | libc handler |
+
+## Adaptive Backend
 
 Detailed design: [adaptive_allocator.md](adaptive_allocator.md).
 
-## 8. Validation And Benchmarking
+Summary:
 
-The project compares allocators through common tools:
+- Shared Memory Management Layer owns `AdaptiveHeader`, registry, page table, size-class pages, spans, direct mappings, free lists, reclaim, and telemetry events.
+- Adaptive Mode Policy Layer owns `AllocationPlan` and `ReleaseDecision` generation for `Balanced`, `ThroughputCache`, `DeterministicLatency`, `CompactRSS`, `FragmentationStable`, `CrossThreadMessage`, `LargeObjectStreaming`, and `HardenedDebug`.
+- Runtime Telemetry and Selector extracts `WorkloadFeatures`, applies rule selection with window/cooldown/hysteresis, and soft-switches active mode.
 
-| Tool | Purpose |
-|---|---|
-| `allocator_validate` | Correctness checks for malloc/free/realloc/usable-size behavior. |
-| `bench_runner` | Built-in smoke, micro, stress, and focused benchmarks. |
-| `LD_PRELOAD` tests | Basic drop-in behavior through `libmy_ptmalloc.so`. |
-| `scripts/external_bench.sh` | Optional external workloads such as mimalloc-bench and Redis when available. |
-
-Typical workflow:
+## Validation And Benchmarking
 
 ```bash
 cmake --build build -j$(nproc)
@@ -210,39 +139,16 @@ for s in hybrid ptmalloc tcmalloc_like jemalloc_like mimalloc_like adaptive libc
 done
 ```
 
-Benchmark results should be interpreted as learning signals. A simplified teaching allocator may win a microbenchmark without being production-ready, and may lose broad workloads because production allocators have years of tuning around fragmentation, locality, concurrency, decommit, hardening, and platform-specific behavior.
+Benchmark results are learning signals. The teaching allocators intentionally preserve core ideas without claiming production completeness.
 
-## 9. Observability
-
-Observability is opt-in:
-
-```text
-MY_MALLOC_STATS=1
-MY_MALLOC_TRACE=1
-```
-
-The default hot path avoids always-on expensive tracing because measurement can become part of the workload. Adaptive stats use relaxed atomics and are kept lightweight.
-
-## 10. LD_PRELOAD Bootstrap
-
-LD_PRELOAD interposition is tricky because libc and the dynamic loader can allocate before this allocator is fully initialized. The project uses:
-
-- a small static bootstrap buffer;
-- fallback to real libc allocation for selected early hook paths;
-- tracking for bootstrap pointers so they return to libc on `free`/`realloc`.
-
-This avoids freeing libc-owned startup allocations through project-owned allocator paths.
-
-## 11. Documentation Map
+## Documentation Map
 
 | Document | Scope |
 |---|---|
-| [allocator_lab.md](allocator_lab.md) | Strategy API, validation workflow, plugin strategy workflow, comparison methodology. |
-| [benchmarking.md](benchmarking.md) | Built-in and external benchmark commands, profiles, and result interpretation. |
-| [ptmalloc_design.md](ptmalloc_design.md) | ptmalloc-style chunks, bins, arenas, tcache, coalescing, and simplifications. |
-| [tcmalloc_design.md](tcmalloc_design.md) | tcmalloc-like size classes, thread cache, central cache, spans, and simplifications. |
-| [jemalloc_design.md](jemalloc_design.md) | jemalloc-like arenas, runs, tcache, extent concepts, and simplifications. |
-| [mimalloc_design.md](mimalloc_design.md) | mimalloc-like heap ownership, pages, remote frees, and simplifications. |
-| [adaptive_allocator.md](adaptive_allocator.md) | Independent adaptive backend, shared runtime, AdaptiveMode table, telemetry, and soft switching. |
-
-If an allocator implementation changes, update both this system map and the allocator-specific design document.
+| [allocator_lab.md](allocator_lab.md) | Strategy API, validation workflow, plugin workflow, comparison methodology |
+| [benchmarking.md](benchmarking.md) | Benchmark commands, adaptive JSON fields, external benchmark notes |
+| [adaptive_allocator.md](adaptive_allocator.md) | Shared memory layer, mode policy layer, telemetry/selector, soft switching |
+| [ptmalloc_design.md](ptmalloc_design.md) | ptmalloc-style allocator |
+| [tcmalloc_design.md](tcmalloc_design.md) | tcmalloc-like allocator |
+| [jemalloc_design.md](jemalloc_design.md) | jemalloc-like allocator |
+| [mimalloc_design.md](mimalloc_design.md) | mimalloc-like allocator |

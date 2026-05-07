@@ -31,7 +31,6 @@ flowchart TB
     JE["jemalloc_like"]
     MI["mimalloc_like"]
     AD["adaptive"]
-    Demo["adaptive_demo"]
     Libc["libc"]
     Plugin["plugin:path.so"]
 
@@ -43,7 +42,6 @@ flowchart TB
     API --> JE
     API --> MI
     API --> AD
-    API --> Demo
     API --> Libc
     API --> Plugin
 ```
@@ -57,8 +55,7 @@ flowchart TB
 | `tcmalloc_like` | Thread caches, central free lists, 64KB spans | Study tcmalloc-style batching and size classes |
 | `jemalloc_like` | Arenas, size-class runs, per-thread tcache | Study arena/run organization |
 | `mimalloc_like` | Per-thread heaps, owned pages, remote-free queues | Study cross-thread free ownership |
-| `adaptive` | Independent multi-mode adaptive backend | Study adaptive ownership, allocation-time mode metadata, soft switching, and telemetry |
-| `adaptive_demo` / `demo_all` | Legacy dispatcher over teaching modes | Demonstrate cross-allocator policy selection |
+| `adaptive` | Independent two-layer adaptive backend | Study adaptive ownership, allocation-time mode metadata, soft switching, and telemetry |
 | `libc` / `glibc` | System malloc | Reference baseline |
 | `plugin:path.so` | External shared library | User-defined allocator experiments |
 
@@ -179,7 +176,7 @@ done
 
 ## 7. Adaptive Allocator Experiments
 
-The built-in `adaptive` strategy is the experimental allocator design in this project, not a wrapper around the teaching allocators. Its top-level abstraction is `AdaptiveMode`, and all modes share one header, ownership table, stats path, and free-routing model.
+The built-in `adaptive` strategy is the experimental two-layer allocator design in this project, not a wrapper around the teaching allocators. It has shared memory services underneath an adaptive mode policy layer. Modes return `AllocationPlan` and `ReleaseDecision`; the shared layer owns headers, ownership lookup, size-class pages, spans, direct mappings, and reclaim.
 
 Current modes:
 
@@ -220,14 +217,6 @@ if remote_free_ratio is high:
 if large_bytes_ratio is high:
     use large_object
 ```
-
-Machine-learning or reinforcement-learning policies can be added later, but they need stable observations and a reward function. For allocator experiments, a practical reward usually combines throughput, p99 latency, adaptation speed after phase changes, and memory overhead:
-
-```text
-reward = throughput_score - latency_penalty - rss_penalty - switching_penalty
-```
-
-Without reliable metrics, an ML/RL policy will mostly learn benchmark noise.
 
 ## 8. Notes For Contributors
 

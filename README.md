@@ -22,8 +22,7 @@ Runtime-selectable strategies:
 | `tcmalloc_like` | Teaching allocator | Size classes, thread caches, central free lists, batch refill/drain, 64KB spans. |
 | `jemalloc_like` | Teaching allocator | Arenas, per-thread tcache, size-class runs, arena-local refill. |
 | `mimalloc_like` | Teaching allocator | Per-thread heaps, page ownership, local free lists, remote-free queues. |
-| `adaptive` | Experimental allocator | Multi-mode adaptive backend with shared `AdaptiveHeader`, ownership table, stats, mode table, rule selector, and soft switching. |
-| `adaptive_demo` / `demo_all` | Teaching demo | Legacy dispatcher across teaching allocators for policy demonstration and mixed-ownership stress tests. |
+| `adaptive` | Experimental allocator | Two-layer adaptive backend with shared memory services, mode policy, telemetry, selector, and soft switching. |
 | `libc` / `glibc` | Baseline | System allocator for comparison in tools. |
 
 Main features:
@@ -32,7 +31,7 @@ Main features:
 |---|---|
 | Public API | `malloc`, `free`, `calloc`, `realloc`, `memalign`, `posix_memalign`, `aligned_alloc`, `mallopt`, `malloc_usable_size` |
 | Drop-in usage | `LD_PRELOAD=./build/libmy_ptmalloc.so ./program` |
-| Runtime modes | `hybrid`, `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, `mimalloc_like`, `adaptive`, `adaptive_demo` |
+| Runtime modes | `hybrid`, `ptmalloc`, `tcmalloc_like`, `jemalloc_like`, `mimalloc_like`, `adaptive` |
 | Learning tools | heap inspector, statistics, trace option, strategy API, plugin example |
 | Benchmarks | built-in configurable benchmark runner plus external `mimalloc-bench`, Redis, and real-application smoke hooks |
 
@@ -57,9 +56,11 @@ flowchart TB
     Lab --> JE["jemalloc_like"]
     Lab --> MI["mimalloc_like"]
 
-    Adaptive --> Runtime["Shared Runtime<br/>header + ownership + stats"]
-    Runtime --> Modes["AdaptiveMode table<br/>balanced / cache / RSS / debug"]
-    Modes --> Helpers["Internal helper paths<br/>pooled pages/spans + direct mmap"]
+    Adaptive --> Services["Shared Memory Management Layer<br/>header + ownership + pages/spans/extents"]
+    Adaptive --> Modes["Adaptive Mode Policy Layer<br/>AllocationPlan + ReleaseDecision"]
+    Adaptive --> Selector["Runtime Telemetry + Selector<br/>features + cooldown + soft switch"]
+    Modes --> Services
+    Selector --> Modes
 ```
 
 Public allocation calls still use one API surface. New allocations choose a mode through `MY_MALLOC_MODE`, while `free`/`realloc` route by pointer ownership metadata so objects return to the allocator that created them.
@@ -135,10 +136,15 @@ MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_MODE=throughput_cache LD_PRELOAD=./bu
 MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_MODE=compact_rss LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_MODE=large_object LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_MODE=auto MY_MALLOC_ADAPTIVE_MODE_SELECTOR=rule LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
-MY_MALLOC_MODE=adaptive_demo LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 ```
 
-`MY_MALLOC_MODE=adaptive` is a standalone adaptive allocator backend. Its top-level abstraction is `AdaptiveMode`: `balanced`, `throughput_cache`, `deterministic_latency`, `compact_rss`, `fragmentation_stable`, `cross_thread`, `large_object`, and `hardened_debug`. Pooled page/span storage and direct mapping are internal helper paths inside modes. The old demonstration behavior that dispatches across teaching allocators remains available as `adaptive_demo` / `demo_all`.
+`MY_MALLOC_MODE=adaptive` is a standalone adaptive allocator backend. It is not a dispatcher over `ptmalloc`, `jemalloc_like`, `tcmalloc_like`, or `mimalloc_like`. Its architecture is:
+
+1. **Shared Memory Management Layer**: `AdaptiveHeader`, ownership table, registry, size-class pages, spans, direct mappings/extents, central free lists, reclaim, and raw telemetry events.
+2. **Adaptive Mode Policy Layer**: each mode returns an `AllocationPlan` and `ReleaseDecision`; modes do not directly manipulate page/span/mmap internals.
+3. **Runtime Telemetry and Selector**: extracts workload features, applies rule selection with window/cooldown/hysteresis, and soft-switches the active mode.
+
+Soft switching only affects future allocations. `free`, `realloc`, and `usable_size` route through allocation-time `mode_id` in `AdaptiveHeader`.
 
 Important adaptive knobs:
 
@@ -232,7 +238,7 @@ Full benchmark instructions and current results:
 | [docs/tcmalloc_design.md](docs/tcmalloc_design.md) | tcmalloc-like allocator: size classes, thread cache, central lists, spans |
 | [docs/jemalloc_design.md](docs/jemalloc_design.md) | jemalloc-like allocator: arenas, runs, tcache |
 | [docs/mimalloc_design.md](docs/mimalloc_design.md) | mimalloc-like allocator: per-thread heaps, page ownership, remote-free queues |
-| [docs/adaptive_allocator.md](docs/adaptive_allocator.md) | Independent adaptive backend: AdaptiveMode table, shared metadata, workload features, soft switching, selector rules |
+| [docs/adaptive_allocator.md](docs/adaptive_allocator.md) | Two-layer adaptive backend: shared memory services, mode policy, telemetry selector, soft switching |
 | [docs/allocator_lab.md](docs/allocator_lab.md) | Custom allocator strategy/plugin API and validation workflow |
 | [docs/benchmarking.md](docs/benchmarking.md) | Benchmark methodology, commands, smoke results |
 | [docs/external_benchmark_results.md](docs/external_benchmark_results.md) | External benchmark run notes and environment blockers |
@@ -243,5 +249,5 @@ Full benchmark instructions and current results:
 - Cross-thread slab frees do not yet use owner-thread remote-free queues.
 - The size-class table is simple 16-byte spacing, not a production-tuned table.
 - Large allocation and extent management are simpler than jemalloc/tcmalloc/mimalloc.
-- The adaptive backend now has a shared `AdaptiveHeader`, allocation-time `mode_id`, mode table dispatch, owner-thread telemetry, rule-based soft switching, per-mode stats, and internal pooled/direct-mmap helper paths. It still lacks real thread-local caches, remote-free queues, fragmentation-stable size-class policy, sampled p99 latency, and hardened quarantine/redzones.
+- The adaptive backend now has shared memory services, `AllocationPlan` / `ReleaseDecision` mode policy, allocation-time `mode_id`, owner-thread telemetry, rule-based soft switching, and per-mode stats. It still lacks real thread-local caches, remote-free queues, fragmentation-stable size-class policy, sampled p99 latency, and full redzone support.
 - External benchmark coverage depends on local tools such as Redis, glibc benchtests, SQLite, clang, Z3, jemalloc, tcmalloc, and mimalloc.

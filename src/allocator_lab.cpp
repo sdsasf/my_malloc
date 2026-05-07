@@ -63,8 +63,6 @@ void allocator_lab_init_once() noexcept {
         g_mode = AllocMode::MimallocLike;
     } else if (env_equals(mode, "adaptive")) {
         g_mode = AllocMode::Adaptive;
-    } else if (env_equals(mode, "adaptive_demo")) {
-        g_mode = AllocMode::AdaptiveDemo;
     } else {
         g_mode = AllocMode::Hybrid;
     }
@@ -223,7 +221,6 @@ void my_malloc_dump_stats_json(FILE* out) noexcept {
                 case AllocMode::JemallocLike: return "jemalloc_like";
                 case AllocMode::MimallocLike: return "mimalloc_like";
                 case AllocMode::Adaptive: return "adaptive";
-                case AllocMode::AdaptiveDemo: return "adaptive_demo";
             }
             return "unknown";
         }(),

@@ -14,7 +14,6 @@ enum class AllocMode : uint8_t {
     JemallocLike,
     MimallocLike,
     Adaptive,       // independent adaptive allocator backend
-    AdaptiveDemo,   // legacy: dispatches across teaching allocators
 };
 
 enum class AllocOp : uint8_t {

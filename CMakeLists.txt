@@ -100,11 +100,10 @@ target_include_directories(allocator_validate PRIVATE include tools)
 target_link_libraries(allocator_validate PRIVATE my_ptmalloc_static pthread dl)
 target_compile_options(allocator_validate PRIVATE -O2 -march=native)
 
-foreach(strategy hybrid ptmalloc tcmalloc_like jemalloc_like mimalloc_like adaptive adaptive_demo libc)
+foreach(strategy hybrid ptmalloc tcmalloc_like jemalloc_like mimalloc_like adaptive libc)
   add_test(NAME validate_${strategy}
            COMMAND allocator_validate --strategy ${strategy})
 endforeach()
-add_test(NAME validate_demo_all COMMAND allocator_validate --strategy demo_all)
 
 add_executable(bench_runner tools/bench_runner.cpp)
 target_include_directories(bench_runner PRIVATE include tools)
@@ -138,9 +137,4 @@ add_test(NAME preload_adaptive_static
          LD_PRELOAD=$<TARGET_FILE:my_ptmalloc>
          MY_MALLOC_MODE=adaptive
          MY_MALLOC_ADAPTIVE_MODE=balanced
-         $<TARGET_FILE:test_basic>)
-add_test(NAME preload_adaptive_demo
-         COMMAND ${CMAKE_COMMAND} -E env
-         LD_PRELOAD=$<TARGET_FILE:my_ptmalloc>
-         MY_MALLOC_MODE=adaptive_demo
          $<TARGET_FILE:test_basic>)

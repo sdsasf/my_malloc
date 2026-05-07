@@ -61,8 +61,7 @@ build/libmy_ptmalloc.so
 | `tcmalloc_like` | Teaching thread-cache/central-list/span allocator |
 | `jemalloc_like` | Teaching arena/run/tcache allocator |
 | `mimalloc_like` | Teaching per-thread heap/page/remote-free allocator |
-| `adaptive` | Independent multi-mode adaptive backend |
-| `adaptive_demo` / `demo_all` | Legacy demo policy over teaching implementations |
+| `adaptive` | Independent two-layer adaptive backend |
 | `libc` / `glibc` | System allocator baseline |
 | `plugin:path.so` | External allocator strategy |
 
@@ -149,12 +148,14 @@ MY_MALLOC_ADAPTIVE_MODE=auto MY_MALLOC_ADAPTIVE_MODE_WINDOW=64 \
 JSON example:
 
 ```bash
-./build/bench_runner --strategy hybrid --profile micro --json
+./build/bench_runner --strategy adaptive --bench same_size_64 --json
 ```
 
 ```json
-{"strategy":"adaptive","benchmark":"same_size_64","ops_per_sec":24000000,"ms":41.000,"peak_rss_kb":31104,"adaptive":{"current_mode":"balanced","active_mode":"balanced","previous_mode":"balanced","mode_switches":0,"retired_mode_count":0,"mapped_bytes":0,"live_bytes":0,"mapped_live_ratio":0.000,"remote_free_ratio":0.000,"size_entropy":0.000,"large_bytes_ratio":0.000,"fragmentation_estimate":0.000,"slow_path_ratio":0.000,"double_free_count":0,"invalid_free_count":0}}
+{"strategy":"adaptive","benchmark":"same_size_64","ops_per_sec":24000000,"ms":41.000,"peak_rss_kb":31104,"adaptive":{"current_mode":"balanced","active_mode":"balanced","previous_mode":"balanced","mode_switches":0,"retired_mode_count":0,"mapped_bytes":65536,"live_bytes":0,"mapped_live_ratio":0.000,"remote_free_ratio":0.000,"size_entropy":0.000,"large_bytes_ratio":0.000,"fragmentation_estimate":0.000,"slow_path_ratio":0.000,"double_free_count":0,"invalid_free_count":0,"storage_allocs":[1,0,0],"storage_frees":[1,0,0],"pool_hits":[0,0,0],"pool_misses":[1,0,0]}}
 ```
+
+Adaptive JSON is centered on the two-layer architecture: mode fields describe the policy layer, storage/cache/release fields describe the shared memory layer, and feature ratios describe selector inputs. Important adaptive fields are `current_mode`, `mode_switches`, per-mode alloc/free/live/mapped arrays, `storage_allocs`, `storage_frees`, `pool_hits`, `pool_misses`, `release_unmapped_bytes`, `mapped_live_ratio`, `remote_free_ratio`, `size_entropy`, `large_bytes_ratio`, `fragmentation_estimate`, and `slow_path_ratio`.
 
 When `--repeats N` is greater than 1, JSON output reports aggregate `mean`, `median`, `p95`, `stddev`, `min`, and `max` operation rates instead of relying on a single sample.
 
@@ -327,7 +328,7 @@ Interpretation:
 
 Detailed raw-result notes are in [external_benchmark_results.md](external_benchmark_results.md).
 
-## 14. Current Multi-mode Results
+## 14. Adaptive Mode Workloads
 
 Use the mode-specific workloads to compare adaptive mode behavior:
 
@@ -343,7 +344,7 @@ MY_MALLOC_ADAPTIVE_MODE=large_object ./build/bench_runner --strategy adaptive --
 MY_MALLOC_ADAPTIVE_MODE=hardened_debug ./build/bench_runner --strategy adaptive --bench debug_safety --json
 ```
 
-JSON output includes mode telemetry, so current measurements should be interpreted by mode (`current_mode`, per-mode counts, remote-free ratio, large-bytes ratio, fragmentation estimate, and mapped/live ratio).
+JSON output includes mode telemetry, shared-memory storage telemetry, and selector features. Current measurements should be interpreted by mode (`current_mode`, per-mode counts), memory substrate behavior (`storage_allocs`, `pool_hits`, `pool_misses`, `release_unmapped_bytes`), and feature ratios (`remote_free_ratio`, `large_bytes_ratio`, `fragmentation_estimate`, `slow_path_ratio`, `mapped_live_ratio`).
 
 External `mimalloc-bench glibc-simple` was also run through LD_PRELOAD for all modes:
 
