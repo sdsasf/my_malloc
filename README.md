@@ -209,6 +209,9 @@ Run individual workloads:
 ./build/bench_runner --strategy hybrid --bench cross_thread_free --threads 8 --batch 10000
 ./build/bench_runner --strategy adaptive --bench phase_changing --json
 ./build/bench_runner --strategy adaptive --bench same_size_64 --repeats 5 --json
+./build/bench_runner --strategy adaptive --bench generated_workload --workload-template adaptive_mix --json
+./build/bench_runner --strategy ptmalloc --bench generated_workload --workload-template adaptive_mix --json
+./build/bench_runner --strategy adaptive --bench generated_workload --workload-template adaptive_mix --telemetry-port 8080
 ```
 
 External benchmarks:
@@ -239,6 +242,8 @@ Full benchmark instructions and current results:
 | [docs/jemalloc_design.md](docs/jemalloc_design.md) | jemalloc-like allocator: arenas, runs, tcache |
 | [docs/mimalloc_design.md](docs/mimalloc_design.md) | mimalloc-like allocator: per-thread heaps, page ownership, remote-free queues |
 | [docs/adaptive_allocator.md](docs/adaptive_allocator.md) | Two-layer adaptive backend: shared memory services, mode policy, telemetry selector, soft switching |
+| [docs/adaptive_workload_generator.md](docs/adaptive_workload_generator.md) | Generated multi-phase workloads for comparing adaptive and fixed allocators |
+| [docs/adaptive_visualization.md](docs/adaptive_visualization.md) | Optional local web UI for generated workload and adaptive mode telemetry |
 | [docs/allocator_lab.md](docs/allocator_lab.md) | Custom allocator strategy/plugin API and validation workflow |
 | [docs/benchmarking.md](docs/benchmarking.md) | Benchmark methodology, commands, smoke results |
 | [docs/external_benchmark_results.md](docs/external_benchmark_results.md) | External benchmark run notes and environment blockers |

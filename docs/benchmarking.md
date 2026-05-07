@@ -93,6 +93,7 @@ build/libmy_ptmalloc.so
 | `fragmentation` | Realloc, split/coalesce policy, RSS pressure |
 | `cross_thread_free` | Producer/consumer ownership behavior |
 | `latency_sample` | Rough latency smoke check |
+| `generated_workload` | Template-driven multi-phase load generator for all strategies |
 
 Examples:
 
@@ -101,6 +102,7 @@ Examples:
 ./build/bench_runner --strategy hybrid --bench random --random-iters 500000 --slots 8192 --min-size 16 --max-size 16384
 ./build/bench_runner --strategy hybrid --bench fragmentation --iters 100000 --slots 4096
 ./build/bench_runner --strategy hybrid --bench cross_thread_free --threads 8 --batch 10000
+./build/bench_runner --strategy adaptive --bench generated_workload --workload-template adaptive_mix --json
 ```
 
 ## 6. Parameters
@@ -115,6 +117,8 @@ Examples:
 | `--batch N` | Batch size |
 | `--rounds N` | Number of batch rounds |
 | `--threads N` | Number of worker threads |
+| `--workload-template NAME` | Template for `generated_workload`: `adaptive_mix`, `throughput_churn`, `remote_queue`, `large_burst`, `rss_peak_release`, `fragmentation_drift`, or `latency_loop` |
+| `--telemetry-port N` | Optional local web UI and `/snapshot` endpoint on `127.0.0.1:N` |
 | `--repeats N` | Repeat each benchmark and output aggregate statistics |
 | `--seed N` | Deterministic random seed |
 | `--json` | Emit JSON lines |
@@ -143,6 +147,12 @@ MY_MALLOC_ADAPTIVE_MODE=compact_rss \
 
 MY_MALLOC_ADAPTIVE_MODE=auto MY_MALLOC_ADAPTIVE_MODE_WINDOW=64 \
   ./build/bench_runner --strategy adaptive --bench producer_consumer --json
+
+./build/bench_runner --strategy adaptive --bench generated_workload \
+  --workload-template adaptive_mix --json
+
+./build/bench_runner --strategy ptmalloc --bench generated_workload \
+  --workload-template adaptive_mix --json
 ```
 
 JSON example:
