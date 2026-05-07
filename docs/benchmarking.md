@@ -118,10 +118,13 @@ Examples:
 | `--rounds N` | Number of batch rounds |
 | `--threads N` | Number of worker threads |
 | `--workload-template NAME` | Template for `generated_workload`: `adaptive_mix`, `throughput_churn`, `remote_queue`, `large_burst`, `rss_peak_release`, `fragmentation_drift`, or `latency_loop` |
+| `--workload-config PATH` | JSON phase config for `generated_workload`, for example `workloads/phase_large_to_small.json` |
 | `--workload-realtime` | Run `generated_workload` by wall-clock phase time for visualization |
 | `--phase-ms N` | Realtime generated workload phase duration |
 | `--target-ops-per-sec N` | Realtime generated workload throttle target |
 | `--phase-repeat N` | Realtime generated workload template repetitions |
+| `--payload-validation` | Enable sampled deterministic payload checks in `generated_workload` |
+| `--payload-validation-rate N` | Check one generated allocation every N operations |
 | `--telemetry-port N` | Optional local web UI and `/snapshot` endpoint on `127.0.0.1:N` |
 | `--telemetry-hold-ms N` | Keep the local telemetry UI alive after a non-JSON run finishes; default is 300000 ms when a telemetry port is enabled |
 | `--repeats N` | Repeat each benchmark and output aggregate statistics |

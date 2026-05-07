@@ -96,6 +96,13 @@ Telemetry tracks:
 
 The selector extracts these as delta-window features. Hot-path telemetry keeps cumulative counters for snapshots and JSON output, while `adaptive_extract_window_features()` advances an internal baseline and returns only the activity since the previous extraction. Gauge-style fields such as live bytes and mapped bytes remain current values so mapped/live pressure is evaluated against the allocator's actual retained memory.
 
+At each selector window boundary, `src/adaptive_selector.cpp` records an
+`AdaptiveSelectorEvent` into a fixed-size ring buffer. Each event stores the
+previous/current/candidate mode, whether a soft switch happened, the decision
+reason, and the window feature values used for the decision. Tooling such as
+`bench_runner` reads this ring buffer for explanation; it does not call
+`adaptive_extract_window_features()` from the Web snapshot path.
+
 ## Selector Rules
 
 `MY_MALLOC_ADAPTIVE_MODE=auto` with `MY_MALLOC_ADAPTIVE_MODE_SELECTOR=rule` enables rule selection:

@@ -1,0 +1,21 @@
+{
+  "name": "smoke_large_to_small",
+  "phases": [
+    {
+      "name": "large_stream",
+      "kind": "large_burst",
+      "duration_ms": 50,
+      "target_ops_per_sec": 5000,
+      "slots": 128,
+      "threads": 2
+    },
+    {
+      "name": "small_churn",
+      "kind": "small_churn",
+      "duration_ms": 50,
+      "target_ops_per_sec": 5000,
+      "slots": 128,
+      "threads": 2
+    }
+  ]
+}

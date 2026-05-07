@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Adaptive Allocator Telemetry</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="mission-header">
+    <div>
+      <div class="eyebrow">allocator telemetry uplink</div>
+      <h1>Adaptive Allocator Control</h1>
+    </div>
+    <div class="mission-clock">
+      <span id="runState" class="status-pill">standby</span>
+      <span id="missionTime">T+00:00.0</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="hero panel">
+      <div class="mode-stack">
+        <div class="eyebrow">active mode</div>
+        <div id="currentMode" class="mode-name">-</div>
+        <div id="modeTransition" class="mode-transition">previous -</div>
+        <div class="mode-rail-wrap">
+          <div id="modeLabels" class="mode-labels"></div>
+          <div id="modeRail" class="mode-rail"></div>
+        </div>
+      </div>
+      <div class="phase-stack">
+        <div class="eyebrow">workload phase</div>
+        <div id="phaseName" class="phase-name">-</div>
+        <div class="phase-bar"><div id="phaseFill"></div></div>
+        <div id="phaseCells" class="phase-cells"></div>
+      </div>
+    </section>
+
+    <section class="metric-grid">
+      <article class="metric-card critical">
+        <div class="metric-icon" data-icon="pulse"></div>
+        <div><div class="metric-label">throughput</div><div id="ops" class="metric-value">0</div><div class="metric-unit">ops/sec</div></div>
+      </article>
+      <article class="metric-card">
+        <div class="metric-icon" data-icon="memory"></div>
+        <div><div class="metric-label">live memory</div><div id="liveBytes" class="metric-value">0</div><div class="metric-unit">bytes</div></div>
+      </article>
+      <article class="metric-card">
+        <div class="metric-icon" data-icon="orbit"></div>
+        <div><div class="metric-label">mapped / live</div><div id="mappedLive" class="metric-value">0</div><div class="metric-unit">ratio</div></div>
+      </article>
+      <article class="metric-card">
+        <div class="metric-icon" data-icon="shield"></div>
+        <div><div class="metric-label">validation errors</div><div id="validationErrors" class="metric-value">0</div><div class="metric-unit">payload checks</div></div>
+      </article>
+    </section>
+
+    <section class="panel chart-panel">
+      <div class="section-head">
+        <div><div class="eyebrow">flight trace</div><h2>Runtime Signals</h2></div>
+        <div class="legend">
+          <span>each signal uses its own scale</span>
+          <span>EMA smoothing enabled</span>
+        </div>
+      </div>
+      <div class="signal-grid">
+        <div class="signal-card"><canvas id="opsChart" width="640" height="190"></canvas></div>
+        <div class="signal-card"><canvas id="liveChart" width="640" height="190"></canvas></div>
+        <div class="signal-card"><canvas id="mappedChart" width="640" height="190"></canvas></div>
+        <div class="signal-card"><canvas id="ratioChart" width="640" height="190"></canvas></div>
+      </div>
+    </section>
+
+    <section class="split">
+      <article class="panel decision-panel">
+        <div class="section-head"><div><div class="eyebrow">selector window</div><h2>Last Decision</h2></div></div>
+        <div id="decisionSummary" class="decision-summary">Waiting for selector window.</div>
+        <div id="featureBars" class="feature-bars"></div>
+      </article>
+      <article class="panel">
+        <div class="section-head"><div><div class="eyebrow">mode timeline</div><h2>Soft Switch Log</h2></div></div>
+        <div id="modeTimeline" class="timeline"></div>
+      </article>
+    </section>
+
+    <section class="split">
+      <article class="panel"><div class="section-head"><h2>Workload</h2></div><table id="workloadTable"></table></article>
+      <article class="panel"><div class="section-head"><h2>Adaptive Signals</h2></div><table id="adaptiveTable"></table></article>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

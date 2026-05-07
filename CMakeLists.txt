@@ -147,10 +147,14 @@ foreach(strategy hybrid ptmalloc tcmalloc_like jemalloc_like mimalloc_like adapt
            COMMAND allocator_validate --strategy ${strategy})
 endforeach()
 
-add_executable(bench_runner tools/bench_runner.cpp)
+add_executable(bench_runner
+    tools/bench_runner.cpp
+    tools/telemetry_server.cpp)
 target_include_directories(bench_runner PRIVATE include tools)
 target_link_libraries(bench_runner PRIVATE my_ptmalloc_static pthread dl)
 target_compile_options(bench_runner PRIVATE -O2 -march=native)
+target_compile_definitions(bench_runner PRIVATE
+    WEB_VIEWER_DIR="${CMAKE_SOURCE_DIR}/tools/web_viewer")
 
 add_test(NAME generated_workload_adaptive
          COMMAND bench_runner --strategy adaptive --bench generated_workload
@@ -163,6 +167,12 @@ add_test(NAME generated_workload_realtime_adaptive
 add_test(NAME generated_workload_ptmalloc
          COMMAND bench_runner --strategy ptmalloc --bench generated_workload
                  --workload-template adaptive_mix --iters 5000 --slots 256 --threads 2 --json)
+add_test(NAME generated_workload_config_validation
+         COMMAND bench_runner --strategy adaptive --bench generated_workload
+                 --workload-config ${CMAKE_SOURCE_DIR}/workloads/smoke_large_to_small.json
+                 --workload-realtime
+                 --payload-validation --payload-validation-rate 8
+                 --slots 128 --threads 2 --json)
 
 # Example plugin strategy for users to copy.
 add_library(example_counting_strategy MODULE plugins/counting_malloc_strategy.cpp)

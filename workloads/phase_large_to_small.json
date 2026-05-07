@@ -1,0 +1,26 @@
+{
+  "name": "phase_large_to_small",
+  "repeat": 1,
+  "phases": [
+    {
+      "name": "large_stream",
+      "kind": "large_burst",
+      "duration_ms": 10000,
+      "target_ops_per_sec": 20000,
+      "threads": 4,
+      "slots": 2048,
+      "min_size": 65536,
+      "max_size": 1048576
+    },
+    {
+      "name": "small_churn",
+      "kind": "small_churn",
+      "duration_ms": 10000,
+      "target_ops_per_sec": 60000,
+      "threads": 4,
+      "slots": 4096,
+      "min_size": 32,
+      "max_size": 256
+    }
+  ]
+}

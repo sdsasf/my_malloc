@@ -44,21 +44,46 @@ For non-adaptive strategies, the page shows workload phase, ops/sec, live-set
 estimates, requested bytes, remote-free count, and peak RSS. For adaptive runs,
 it also shows current mode, previous mode, mode switches, mapped/live ratio,
 remote-free ratio, large-object ratio, fragmentation estimate, slow-path ratio,
-and safety counters.
+and safety counters. Adaptive selector decisions are read from the selector
+event ring buffer. The Web snapshot does not call workload feature extraction;
+it only renders events already recorded at selector window boundaries.
 
 The page uses a SpaceX-style black/white telemetry dashboard treatment: high
-contrast text, thin borders, compact status pills, a phase progress track, core
-metric cards, grouped workload/adaptive tables, and a lightweight canvas chart
-for normalized ops/sec, live memory, and mapped memory trends. It is still a
-single embedded page served by `bench_runner`; no frontend assets or
-dependencies are loaded.
+contrast text, thin borders, compact status pills, a phase progress track,
+mission-control metric cards with inline SVG icons, grouped workload/adaptive
+tables, and lightweight canvas charts for ops/sec, live memory, mapped memory,
+and mapped/live trends.
+
+The hero panel includes a SpaceX engine-ignition-style mode rail: all eight
+adaptive modes are listed in order, the active mode is marked by a white dot,
+the previous mode keeps an amber outline, and a mode switch triggers a short
+ignition pulse on the active dot.
+
+The UI is implemented as static assets under `tools/web_viewer/`:
+
+- `index.html`
+- `app.css`
+- `app.js`
+
+`TelemetryServer` serves those files and `/snapshot`. The allocator library does
+not load frontend assets, and no frontend code is embedded in the allocator hot
+path.
+
+The mode timeline explains decisions in plain terms, for example
+`balanced -> large_object` with reason `large_bytes_ratio` and the feature value
+that triggered the candidate mode.
+
+Runtime charts are split by signal instead of drawing every metric on one shared
+normalized axis. Each signal has its own min/max scale, current value label, and
+unit. The frontend applies a small EMA smoothing step so allocator bursts remain
+readable without hiding phase changes.
 
 ## Isolation Rules
 
 Visualization is tool-side only.
 
 - It is disabled by default.
-- No socket, server thread, HTML, JSON formatting, or polling exists unless
+- No socket, server thread, static asset serving, JSON formatting, or polling exists unless
   `--telemetry-port` is passed.
 - The allocator hot path does not perform I/O.
 - The web server lives in `bench_runner`, not in the allocator library.
@@ -75,7 +100,9 @@ switching, not for high-precision performance measurement.
 
 | Endpoint | Purpose |
 |---|---|
-| `/` | Single-file HTML/CSS/JavaScript UI embedded in `bench_runner` |
+| `/` | Static `tools/web_viewer/index.html` |
+| `/app.css` | Static viewer stylesheet |
+| `/app.js` | Static viewer script |
 | `/snapshot` | JSON snapshot for the current workload and optional adaptive telemetry |
 
 The server binds only to `127.0.0.1`.
@@ -117,7 +144,22 @@ The server binds only to `127.0.0.1`.
     "large_bytes_ratio": 0.70,
     "fragmentation_estimate": 0.04,
     "slow_path_ratio": 0.12
-  }
+  },
+  "selector_last_window": {
+    "reason": "large_bytes_ratio",
+    "large_bytes_ratio": 0.91,
+    "remote_free_ratio": 0.0,
+    "mapped_live_ratio": 1.3,
+    "switched": true
+  },
+  "selector_events": [
+    {
+      "current_mode": "balanced",
+      "candidate_mode": "large_object",
+      "switched": true,
+      "reason": "large_bytes_ratio"
+    }
+  ]
 }
 ```
 

@@ -214,6 +214,9 @@ Run individual workloads:
 ./build/bench_runner --strategy adaptive --bench generated_workload \
   --workload-template adaptive_mix --workload-realtime \
   --phase-ms 10000 --target-ops-per-sec 50000 --telemetry-port 8080
+./build/bench_runner --strategy adaptive --bench generated_workload \
+  --workload-config workloads/phase_large_to_small.json \
+  --workload-realtime --payload-validation --json
 ```
 
 External benchmarks:

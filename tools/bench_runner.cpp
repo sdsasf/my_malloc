@@ -1,5 +1,7 @@
 #include "strategy_loader.h"
+#include "telemetry_server.h"
 #include "my_ptmalloc/adaptive_allocator.h"
+#include "my_ptmalloc/adaptive_selector.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -7,14 +9,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <fstream>
 #include <mutex>
 #include <random>
 #include <sstream>
 #include <string>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <sys/resource.h>
 #include <thread>
 #include <time.h>
@@ -51,10 +50,13 @@ struct BenchConfig {
     int repeats = 1;
     unsigned seed = 12345;
     std::string workload_template = "adaptive_mix";
+    std::string workload_config;
     bool workload_realtime = false;
     int phase_ms = 10000;
     int target_ops_per_sec = 50000;
     int phase_repeat = 1;
+    bool payload_validation = false;
+    int payload_validation_rate = 64;
     int telemetry_port = 0;
     int telemetry_hold_ms = 300000;
 };
@@ -96,6 +98,8 @@ struct WorkloadSnapshot {
     uint64_t live_objects = 0;
     uint64_t live_bytes = 0;
     uint64_t peak_live_bytes = 0;
+    uint64_t validation_checks = 0;
+    uint64_t validation_errors = 0;
     double elapsed_ms = 0.0;
     double phase_elapsed_ms = 0.0;
     double phase_duration_ms = 0.0;
@@ -128,6 +132,8 @@ static void update_workload_snapshot(const char* phase,
                                      uint64_t live_objects,
                                      uint64_t live_bytes,
                                      uint64_t peak_live_bytes,
+                                     uint64_t validation_checks,
+                                     uint64_t validation_errors,
                                      double phase_elapsed_ms,
                                      double phase_duration_ms,
                                      bool running) {
@@ -144,6 +150,8 @@ static void update_workload_snapshot(const char* phase,
     g_workload_snapshot.live_objects = live_objects;
     g_workload_snapshot.live_bytes = live_bytes;
     g_workload_snapshot.peak_live_bytes = peak_live_bytes;
+    g_workload_snapshot.validation_checks = validation_checks;
+    g_workload_snapshot.validation_errors = validation_errors;
     g_workload_snapshot.elapsed_ms = g_workload_start_ms > 0.0 ? now_ms() - g_workload_start_ms : 0.0;
     g_workload_snapshot.phase_elapsed_ms = phase_elapsed_ms;
     g_workload_snapshot.phase_duration_ms = phase_duration_ms;
@@ -156,6 +164,25 @@ static void update_workload_snapshot(const char* phase,
 static WorkloadSnapshot workload_snapshot_copy() {
     std::lock_guard<std::mutex> lock(g_workload_snapshot_mutex);
     return g_workload_snapshot;
+}
+
+static void append_selector_event_json(std::ostringstream& os,
+                                       const my_ptmalloc::AdaptiveSelectorEvent& e) {
+    const auto& f = e.features;
+    os << "{\"sequence\":" << e.sequence
+       << ",\"previous_mode\":\"" << my_ptmalloc::adaptive_mode_name(e.previous_mode)
+       << "\",\"current_mode\":\"" << my_ptmalloc::adaptive_mode_name(e.current_mode)
+       << "\",\"candidate_mode\":\"" << my_ptmalloc::adaptive_mode_name(e.candidate_mode)
+       << "\",\"switched\":" << (e.switched ? "true" : "false")
+       << ",\"reason\":\"" << e.reason
+       << "\",\"large_bytes_ratio\":" << f.large_bytes_ratio
+       << ",\"remote_free_ratio\":" << f.remote_free_ratio
+       << ",\"mapped_live_ratio\":" << f.mapped_live_ratio
+       << ",\"size_entropy\":" << f.size_entropy
+       << ",\"fragmentation_estimate\":" << f.internal_frag_ratio
+       << ",\"slow_path_ratio\":" << f.slow_path_ratio
+       << ",\"cache_hit_rate\":" << f.cache_hit_rate
+       << "}";
 }
 
 static void touch_bytes(void* p, size_t size, unsigned char value) {
@@ -189,6 +216,8 @@ static std::string telemetry_snapshot_json() {
        << ",\"phase_duration_ms\":" << w.phase_duration_ms
        << ",\"phase_progress\":" << w.phase_progress
        << ",\"peak_rss_kb\":" << peak_rss_kb()
+       << "},\"generated\":{\"validation_checks\":" << w.validation_checks
+       << ",\"validation_errors\":" << w.validation_errors
        << "}";
     if (std::strcmp(w.strategy, "adaptive") == 0) {
         auto s = my_ptmalloc::adaptive_stats_snapshot();
@@ -206,206 +235,23 @@ static std::string telemetry_snapshot_json() {
            << ",\"double_free_count\":" << s.double_free_count
            << ",\"invalid_free_count\":" << s.invalid_free_count
            << "}";
+        my_ptmalloc::AdaptiveSelectorEvent last_event{};
+        if (my_ptmalloc::adaptive_selector_last_event(last_event)) {
+            os << ",\"selector_last_window\":";
+            append_selector_event_json(os, last_event);
+        }
+        my_ptmalloc::AdaptiveSelectorEvent events[16]{};
+        size_t event_count = my_ptmalloc::adaptive_selector_events_snapshot(events, 16);
+        os << ",\"selector_events\":[";
+        for (size_t i = 0; i < event_count; ++i) {
+            if (i) os << ",";
+            append_selector_event_json(os, events[i]);
+        }
+        os << "]";
     }
     os << "}";
     return os.str();
 }
-
-static const char* telemetry_html() {
-    return R"HTML(<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>adaptive workload viewer</title>
-<style>
-:root{color-scheme:dark;--bg:#050505;--panel:#0b0c0e;--panel2:#101113;--line:#2b2f35;--line2:#59616b;--text:#f7f7f3;--muted:#a4abb3;--amber:#f0b35b;--gold:#f5d07a;--blue:#a9d8ff;--green:#d7f2dc;--red:#ff7d70}
-*{box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#050505;color:var(--text)}
-header{padding:18px 24px;background:#050505;border-bottom:1px solid var(--line);letter-spacing:.04em}
-h1{font-size:18px;margin:0;font-weight:650}.sub{color:var(--muted);font-size:12px;margin-top:5px;text-transform:uppercase}
-.wrap{padding:16px;max-width:1320px;margin:0 auto}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-.card{background:#0b0c0e;border:1px solid var(--line);border-radius:4px;padding:14px;box-shadow:0 18px 38px rgba(0,0,0,.28)}
-.hero{grid-column:span 4;display:grid;grid-template-columns:1.25fr 1fr;gap:18px;align-items:center}
-.label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.value{font-size:24px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
-.big{font-size:36px}.pill{display:inline-block;border:1px solid var(--line2);border-radius:2px;padding:5px 10px;color:#f7f7f3;background:#070707;font-size:12px;margin-right:6px;text-transform:uppercase}
-.phase-track{height:14px;background:#060606;border:1px solid var(--line2);border-radius:2px;overflow:hidden;margin-top:12px}.phase-fill{height:100%;width:0;background:#f7f7f3;box-shadow:0 0 18px rgba(255,255,255,.24)}
-.phase-row{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;margin-top:12px}.phase-cell{height:8px;border-radius:2px;background:#15171a;border:1px solid #2b2f35}.phase-cell.active{background:#f7f7f3;border-color:#f7f7f3}
-canvas{width:100%;height:300px;background:#030303;border:1px solid var(--line);border-radius:4px}
-.wide{grid-column:span 4}.span2{grid-column:span 2}.legend{display:flex;gap:16px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:10px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}.hint{margin-left:auto;color:#657789}
-table{width:100%;border-collapse:collapse}td{padding:7px 0;border-bottom:1px solid #172332}td:first-child{color:var(--muted);text-transform:uppercase;font-size:11px;letter-spacing:.05em}td:last-child{text-align:right;color:#e8f3ff;font-variant-numeric:tabular-nums}
-@media(max-width:800px){.grid{grid-template-columns:1fr}.hero,.wide,.span2{grid-column:span 1}.hero{grid-template-columns:1fr}.value{font-size:20px}.big{font-size:28px}}
-</style>
-</head>
-<body>
-<header><h1>Adaptive Workload Telemetry</h1><div class="sub">Realtime generated load, mode selection, and memory substrate signals</div></header>
-<div class="wrap"><div class="grid">
-<div class="card hero">
-  <div>
-    <div><span id="running" class="pill">starting</span><span id="modepill" class="pill">mode -</span></div>
-    <div class="label" style="margin-top:14px">current phase</div>
-    <div id="phase" class="value big">-</div>
-    <div class="phase-track"><div id="phasebar" class="phase-fill"></div></div>
-    <div id="phases" class="phase-row"></div>
-  </div>
-  <div>
-    <div class="label">strategy</div><div id="strategy" class="value">-</div>
-    <div class="label" style="margin-top:14px">template</div><div id="template" class="value">-</div>
-  </div>
-</div>
-<div class="card"><div class="label">ops/sec</div><div id="ops" class="value">0</div></div>
-<div class="card"><div class="label">live bytes</div><div id="live" class="value">0</div></div>
-<div class="card"><div class="label">current / previous mode</div><div id="modes" class="value">-</div></div>
-<div class="card"><div class="label">peak RSS KB</div><div id="rss" class="value">0</div></div>
-<div class="card wide"><canvas id="chart" width="1180" height="300"></canvas><div class="legend"><span><i class="dot" style="background:#f7f7f3"></i>throughput trend</span><span><i class="dot" style="background:#a4abb3"></i>live memory trend</span><span><i class="dot" style="background:#f0b35b"></i>mapped memory trend</span><span class="hint">normalized with headroom so shape is visible</span></div></div>
-<div class="card span2"><table id="workloadMetrics"></table></div>
-<div class="card span2"><table id="adaptiveMetrics"></table></div>
-</div>
-</div>
-<script>
-const hist=[]; const maxN=240;
-function fmt(n){if(n===undefined||n===null)return 'n/a';if(typeof n==='boolean')return n?'yes':'no';if(typeof n==='string')return n;if(!Number.isFinite(Number(n)))return String(n);return Number(n).toLocaleString(undefined,{maximumFractionDigits:2});}
-function draw(){
- const c=document.getElementById('chart'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);
- ctx.fillStyle='#030303';ctx.fillRect(0,0,c.width,c.height);
- const top=30,bottom=26,left=48,right=16,h=c.height-top-bottom,w=c.width-left-right;
- ctx.strokeStyle='#1d2024';ctx.lineWidth=1;
- for(let i=0;i<=4;i++){const y=top+i*h/4;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(left+w,y);ctx.stroke();}
- for(let i=0;i<=6;i++){const x=left+i*w/6;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,top+h);ctx.stroke();}
- ctx.fillStyle='#a4abb3';ctx.font='12px system-ui';ctx.fillText('NORMALIZED TELEMETRY TRENDS',left,18);
- function range(key){const vals=hist.map(p=>p[key]||0);let mn=Math.min(...vals),mx=Math.max(...vals);if(!Number.isFinite(mn)||!Number.isFinite(mx)||mx<=mn){mn=0;mx=Math.max(1,mx||1);}return [mn,mx];}
- function line(key,color){const [mn,mx]=range(key);ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=2.5;hist.forEach((p,i)=>{const x=left+i*(w/Math.max(1,maxN-1));const v=((p[key]||0)-mn)/(mx-mn);const y=top+h-(0.08+v*0.84)*h;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);});ctx.stroke();}
- line('mapped','#f0b35b');line('live','#a4abb3');line('ops','#f7f7f3');
- const last=hist[hist.length-1]; if(last){ctx.fillStyle='#a4abb3';ctx.fillText('latest ops '+fmt(last.ops)+' | live '+fmt(last.live)+' KB | mapped '+fmt(last.mapped)+' KB',left,c.height-8);}
-}
-function phaseCells(index,count){
- let html=''; const n=Math.max(1,Math.min(24,count||1));
- for(let i=0;i<n;i++){const active=i<=index*n/Math.max(1,count);html+='<div class="phase-cell '+(active?'active':'')+'"></div>';}
- document.getElementById('phases').innerHTML=html;
-}
-function rows(items){return items.map(x=>'<tr><td>'+x[0]+'</td><td>'+fmt(x[1])+'</td></tr>').join('');}
-function setRunPill(running){
- const el=document.getElementById('running');el.textContent=running?'running':'finished';el.style.background=running?'#f7f7f3':'#070707';el.style.color=running?'#050505':'#a4abb3';
-}
-async function poll(){
- try{
-  const r=await fetch('/snapshot',{cache:'no-store'}); const j=await r.json(); const w=j.workload, a=j.adaptive||{};
-  document.getElementById('strategy').textContent=w.strategy;
-  document.getElementById('template').textContent=w.template;
-  document.getElementById('modepill').textContent=a.current_mode?'mode '+a.current_mode:'mode n/a';
-  setRunPill(!!w.running);
-  document.getElementById('phase').textContent=(w.phase_index+1)+'/'+w.phase_count+' '+w.phase;
-  document.getElementById('phasebar').style.width=Math.max(0,Math.min(100,(w.phase_progress||0)*100))+'%';
-  phaseCells(w.phase_index,w.phase_count);
-  document.getElementById('ops').textContent=fmt(w.ops_per_sec);
-  document.getElementById('live').textContent=fmt(w.live_bytes);
-  document.getElementById('modes').textContent=(a.current_mode||'n/a')+' / '+(a.previous_mode||'n/a');
-  document.getElementById('rss').textContent=fmt(w.peak_rss_kb);
-  hist.push({ops:w.ops_per_sec||0,live:(w.live_bytes||0)/1024,mapped:(a.mapped_bytes||0)/1024}); if(hist.length>maxN)hist.shift(); draw();
-  document.getElementById('workloadMetrics').innerHTML=rows([['phase elapsed ms',w.phase_elapsed_ms],['phase duration ms',w.phase_duration_ms],['alloc/free/realloc',w.allocs+' / '+w.frees+' / '+w.reallocs],['remote frees',w.remote_frees],['requested bytes',w.requested_bytes],['peak live bytes',w.peak_live_bytes]]);
-  document.getElementById('adaptiveMetrics').innerHTML=rows([['mode switches',a.mode_switches],['mapped/live',a.mapped_live_ratio],['remote ratio',a.remote_free_ratio],['large ratio',a.large_bytes_ratio],['fragmentation',a.fragmentation_estimate],['slow path',a.slow_path_ratio],['safety errors',(a.invalid_free_count||0)+' / '+(a.double_free_count||0)]]);
- }catch(e){}
-}
-setInterval(poll,250); poll();
-</script>
-</body>
-</html>)HTML";
-}
-
-class TelemetryServer {
-public:
-    bool start(int port) {
-        if (port <= 0) return true;
-        fd_ = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd_ < 0) return false;
-        int yes = 1;
-        setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        addr.sin_port = htons(static_cast<uint16_t>(port));
-        if (bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || listen(fd_, 8) != 0) {
-            close(fd_);
-            fd_ = -1;
-            return false;
-        }
-        running_.store(true, std::memory_order_relaxed);
-        thread_ = std::thread([this] { run(); });
-        return true;
-    }
-
-    void stop() {
-        running_.store(false, std::memory_order_relaxed);
-        if (fd_ >= 0) {
-            shutdown(fd_, SHUT_RDWR);
-        }
-        if (thread_.joinable()) thread_.join();
-        if (fd_ >= 0) close(fd_);
-        fd_ = -1;
-    }
-
-    ~TelemetryServer() { stop(); }
-
-private:
-    void run() {
-        while (running_.load(std::memory_order_relaxed)) {
-            fd_set readfds;
-            FD_ZERO(&readfds);
-            FD_SET(fd_, &readfds);
-            timeval tv{0, 200000};
-            int ready = select(fd_ + 1, &readfds, nullptr, nullptr, &tv);
-            if (ready <= 0) continue;
-            int client = accept(fd_, nullptr, nullptr);
-            if (client < 0) continue;
-            handle_client(client);
-            close(client);
-        }
-    }
-
-    void handle_client(int client) {
-        std::string req;
-        char buf[1024];
-        while (req.find("\r\n\r\n") == std::string::npos && req.size() < 8192) {
-            fd_set readfds;
-            FD_ZERO(&readfds);
-            FD_SET(client, &readfds);
-            timeval tv{0, 200000};
-            int ready = select(client + 1, &readfds, nullptr, nullptr, &tv);
-            if (ready <= 0) break;
-            ssize_t n = recv(client, buf, sizeof(buf), 0);
-            if (n <= 0) break;
-            req.append(buf, static_cast<size_t>(n));
-        }
-        if (req.empty()) return;
-        bool snapshot = req.compare(0, 13, "GET /snapshot") == 0;
-        bool favicon = req.compare(0, 16, "GET /favicon.ico") == 0;
-        if (favicon) {
-            const char* response =
-                "HTTP/1.1 204 No Content\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-            send_all(client, response, std::strlen(response));
-            return;
-        }
-        std::string body = snapshot ? telemetry_snapshot_json() : std::string(telemetry_html());
-        const char* type = snapshot ? "application/json" : "text/html; charset=utf-8";
-        char header[256];
-        std::snprintf(header, sizeof(header),
-                      "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nCache-Control: no-store\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
-                      type, body.size());
-        send_all(client, header, std::strlen(header));
-        send_all(client, body.data(), body.size());
-    }
-
-    static void send_all(int fd, const char* data, size_t size) {
-        size_t sent = 0;
-        while (sent < size) {
-            ssize_t n = send(fd, data + sent, size - sent, MSG_NOSIGNAL);
-            if (n <= 0) return;
-            sent += static_cast<size_t>(n);
-        }
-    }
-
-    int fd_ = -1;
-    std::atomic<bool> running_{false};
-    std::thread thread_;
-};
 
 static BenchResult same_size(const StrategyDescriptor& s, size_t size, int iters) {
     volatile unsigned char acc = 0;
@@ -637,9 +483,15 @@ enum class GeneratedPhaseKind {
 };
 
 struct GeneratedPhase {
-    const char* name;
+    std::string name;
     GeneratedPhaseKind kind;
     int weight;
+    int duration_ms = 0;
+    int target_ops_per_sec = 0;
+    int slots = 0;
+    int threads = 0;
+    size_t min_size = 0;
+    size_t max_size = 0;
 };
 
 struct GeneratedMetrics {
@@ -652,7 +504,47 @@ struct GeneratedMetrics {
     uint64_t live_objects = 0;
     uint64_t live_bytes = 0;
     uint64_t peak_live_bytes = 0;
+    uint64_t validation_checks = 0;
+    uint64_t validation_errors = 0;
 };
+
+struct PayloadRecord {
+    void* ptr = nullptr;
+    size_t size = 0;
+    uint64_t id = 0;
+    unsigned char seed = 0;
+};
+
+static void payload_write(void* ptr, size_t size, unsigned char seed) {
+    if (!ptr) return;
+    unsigned char* bytes = static_cast<unsigned char*>(ptr);
+    size_t n = std::min<size_t>(size, 64);
+    for (size_t i = 0; i < n; ++i) bytes[i] = static_cast<unsigned char>(seed + i * 17u);
+}
+
+static bool payload_check(void* ptr, size_t size, unsigned char seed) {
+    if (!ptr) return true;
+    unsigned char* bytes = static_cast<unsigned char*>(ptr);
+    size_t n = std::min<size_t>(size, 64);
+    for (size_t i = 0; i < n; ++i) {
+        if (bytes[i] != static_cast<unsigned char>(seed + i * 17u)) return false;
+    }
+    return true;
+}
+
+static bool should_validate(const BenchConfig& cfg, const GeneratedMetrics& m) {
+    return cfg.payload_validation &&
+           cfg.payload_validation_rate > 0 &&
+           (m.allocs % static_cast<uint64_t>(cfg.payload_validation_rate)) == 0;
+}
+
+static void validation_check_record(const BenchConfig& cfg,
+                                    GeneratedMetrics& m,
+                                    const PayloadRecord& rec) {
+    if (!rec.ptr || !should_validate(cfg, m)) return;
+    m.validation_checks++;
+    if (!payload_check(rec.ptr, rec.size, rec.seed)) m.validation_errors++;
+}
 
 static void metrics_alloc(GeneratedMetrics& m, size_t size) {
     m.ops++;
@@ -711,6 +603,97 @@ static std::vector<GeneratedPhase> generated_template(const std::string& name) {
             {"latency_loop", GeneratedPhaseKind::LatencyLoop, 1}};
 }
 
+static GeneratedPhaseKind generated_kind_from_name(const std::string& name) {
+    if (name.find("fragmentation") != std::string::npos) return GeneratedPhaseKind::FragmentationDrift;
+    if (name.find("remote") != std::string::npos || name.find("producer") != std::string::npos) {
+        return GeneratedPhaseKind::RemoteFree;
+    }
+    if (name.find("large") != std::string::npos) return GeneratedPhaseKind::LargeBurst;
+    if (name.find("peak") != std::string::npos || name.find("rss") != std::string::npos) {
+        return GeneratedPhaseKind::PeakRelease;
+    }
+    if (name.find("latency") != std::string::npos) return GeneratedPhaseKind::LatencyLoop;
+    return GeneratedPhaseKind::SmallChurn;
+}
+
+static bool json_find_string(const std::string& object, const char* key, std::string& out) {
+    std::string needle = std::string("\"") + key + "\"";
+    size_t pos = object.find(needle);
+    if (pos == std::string::npos) return false;
+    pos = object.find(':', pos);
+    if (pos == std::string::npos) return false;
+    pos = object.find('"', pos);
+    if (pos == std::string::npos) return false;
+    size_t end = object.find('"', pos + 1);
+    if (end == std::string::npos) return false;
+    out = object.substr(pos + 1, end - pos - 1);
+    return true;
+}
+
+static bool json_find_int(const std::string& object, const char* key, int& out) {
+    std::string needle = std::string("\"") + key + "\"";
+    size_t pos = object.find(needle);
+    if (pos == std::string::npos) return false;
+    pos = object.find(':', pos);
+    if (pos == std::string::npos) return false;
+    char* end = nullptr;
+    long v = std::strtol(object.c_str() + pos + 1, &end, 10);
+    if (end == object.c_str() + pos + 1) return false;
+    out = static_cast<int>(v);
+    return true;
+}
+
+static bool json_find_size(const std::string& object, const char* key, size_t& out) {
+    int tmp = 0;
+    if (!json_find_int(object, key, tmp) || tmp <= 0) return false;
+    out = static_cast<size_t>(tmp);
+    return true;
+}
+
+static std::vector<GeneratedPhase> load_generated_config(const std::string& path,
+                                                         std::string& workload_name) {
+    std::ifstream in(path);
+    if (!in) return {};
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::string configured_name;
+    if (json_find_string(text, "name", configured_name)) workload_name = configured_name;
+    std::vector<GeneratedPhase> phases;
+    size_t array_pos = text.find("\"phases\"");
+    if (array_pos == std::string::npos) return phases;
+    size_t pos = text.find('{', array_pos);
+    while (pos != std::string::npos) {
+        int depth = 0;
+        size_t end = pos;
+        for (; end < text.size(); ++end) {
+            if (text[end] == '{') depth++;
+            if (text[end] == '}') {
+                depth--;
+                if (depth == 0) break;
+            }
+        }
+        if (end >= text.size()) break;
+        std::string object = text.substr(pos, end - pos + 1);
+        std::string name;
+        std::string kind;
+        json_find_string(object, "name", name);
+        json_find_string(object, "kind", kind);
+        if (name.empty()) name = kind.empty() ? "configured_phase" : kind;
+        GeneratedPhase phase{name, generated_kind_from_name(kind.empty() ? name : kind), 1};
+        json_find_int(object, "weight", phase.weight);
+        json_find_int(object, "duration_ms", phase.duration_ms);
+        json_find_int(object, "target_ops_per_sec", phase.target_ops_per_sec);
+        json_find_int(object, "slots", phase.slots);
+        json_find_int(object, "threads", phase.threads);
+        json_find_size(object, "min_size", phase.min_size);
+        json_find_size(object, "max_size", phase.max_size);
+        phases.push_back(phase);
+        pos = text.find('{', end + 1);
+        size_t close_array = text.find(']', end + 1);
+        if (close_array != std::string::npos && close_array < pos) break;
+    }
+    return phases;
+}
+
 static void publish_generated(const GeneratedPhase& phase,
                               int phase_index,
                               int phase_count,
@@ -718,9 +701,10 @@ static void publish_generated(const GeneratedPhase& phase,
                               double phase_elapsed_ms = 0.0,
                               double phase_duration_ms = 0.0,
                               bool running = true) {
-    update_workload_snapshot(phase.name, phase_index, phase_count, m.ops, m.allocs, m.frees,
+    update_workload_snapshot(phase.name.c_str(), phase_index, phase_count, m.ops, m.allocs, m.frees,
                              m.reallocs, m.remote_frees, m.requested_bytes, m.live_objects,
-                             m.live_bytes, m.peak_live_bytes, phase_elapsed_ms,
+                             m.live_bytes, m.peak_live_bytes, m.validation_checks,
+                             m.validation_errors, phase_elapsed_ms,
                              phase_duration_ms, running);
 }
 
@@ -743,12 +727,16 @@ static void generated_small_churn(const StrategyDescriptor& s,
 
 static void generated_small_churn_chunk(const StrategyDescriptor& s,
                                         int ops,
+                                        const BenchConfig& cfg,
                                         GeneratedMetrics& m) {
     for (int i = 0; i < ops; ++i) {
         size_t size = 32 + static_cast<size_t>((m.ops + static_cast<uint64_t>(i)) % 8) * 16;
         void* p = s.vtable.allocate(size);
-        touch_bytes(p, size, 0x31);
+        unsigned char seed = static_cast<unsigned char>(0x31 + (m.allocs & 31));
+        payload_write(p, size, seed);
         metrics_alloc(m, size);
+        PayloadRecord rec{p, size, m.allocs, seed};
+        validation_check_record(cfg, m, rec);
         s.vtable.deallocate(p);
         metrics_free(m, size);
     }
@@ -772,11 +760,15 @@ static void generated_latency_loop(const StrategyDescriptor& s,
 
 static void generated_latency_loop_chunk(const StrategyDescriptor& s,
                                          int ops,
+                                         const BenchConfig& cfg,
                                          GeneratedMetrics& m) {
     for (int i = 0; i < ops; ++i) {
         void* p = s.vtable.allocate(64);
-        touch_bytes(p, 64, 0x32);
+        unsigned char seed = static_cast<unsigned char>(0x32 + (m.allocs & 31));
+        payload_write(p, 64, seed);
         metrics_alloc(m, 64);
+        PayloadRecord rec{p, 64, m.allocs, seed};
+        validation_check_record(cfg, m, rec);
         s.vtable.deallocate(p);
         metrics_free(m, 64);
     }
@@ -841,12 +833,16 @@ static void generated_large_burst(const StrategyDescriptor& s,
 
 static void generated_large_burst_chunk(const StrategyDescriptor& s,
                                         int ops,
+                                        const BenchConfig& cfg,
                                         GeneratedMetrics& m) {
     for (int i = 0; i < ops; ++i) {
         size_t size = 64 * 1024 + static_cast<size_t>((m.allocs + static_cast<uint64_t>(i)) % 16) * 64 * 1024;
         void* p = s.vtable.allocate(size);
-        touch_bytes(p, size, 0x35);
+        unsigned char seed = static_cast<unsigned char>(0x35 + (m.allocs & 31));
+        payload_write(p, size, seed);
         metrics_alloc(m, size);
+        PayloadRecord rec{p, size, m.allocs, seed};
+        validation_check_record(cfg, m, rec);
         s.vtable.deallocate(p);
         metrics_free(m, size);
     }
@@ -941,14 +937,17 @@ static std::string generated_extra_json(const std::string& templ, const Generate
     std::snprintf(buf, sizeof(buf),
                   "\"generated\":{\"template\":\"%s\",\"allocs\":%llu,\"frees\":%llu,"
                   "\"reallocs\":%llu,\"remote_frees\":%llu,\"requested_bytes\":%llu,"
-                  "\"peak_live_bytes\":%llu}",
+                  "\"peak_live_bytes\":%llu,\"validation_checks\":%llu,"
+                  "\"validation_errors\":%llu}",
                   templ.c_str(),
                   static_cast<unsigned long long>(m.allocs),
                   static_cast<unsigned long long>(m.frees),
                   static_cast<unsigned long long>(m.reallocs),
                   static_cast<unsigned long long>(m.remote_frees),
                   static_cast<unsigned long long>(m.requested_bytes),
-                  static_cast<unsigned long long>(m.peak_live_bytes));
+                  static_cast<unsigned long long>(m.peak_live_bytes),
+                  static_cast<unsigned long long>(m.validation_checks),
+                  static_cast<unsigned long long>(m.validation_errors));
     return buf;
 }
 
@@ -1070,22 +1069,22 @@ static void run_realtime_phase_chunk(const StrategyDescriptor& s,
                                      RealtimePhaseState& state) {
     switch (phase.kind) {
         case GeneratedPhaseKind::SmallChurn:
-            generated_small_churn_chunk(s, ops, m);
+            generated_small_churn_chunk(s, ops, cfg, m);
             break;
         case GeneratedPhaseKind::FragmentationDrift:
-            generated_fragmentation_realtime_chunk(s, ops, cfg.slots, m, state);
+            generated_fragmentation_realtime_chunk(s, ops, phase.slots > 0 ? phase.slots : cfg.slots, m, state);
             break;
         case GeneratedPhaseKind::RemoteFree:
-            generated_remote_realtime_chunk(s, ops, cfg.threads, m, state);
+            generated_remote_realtime_chunk(s, ops, phase.threads > 0 ? phase.threads : cfg.threads, m, state);
             break;
         case GeneratedPhaseKind::LargeBurst:
-            generated_large_burst_chunk(s, std::max(1, ops / 8), m);
+            generated_large_burst_chunk(s, std::max(1, ops / 8), cfg, m);
             break;
         case GeneratedPhaseKind::PeakRelease:
-            generated_peak_release_realtime_chunk(s, ops, cfg.slots, m, state);
+            generated_peak_release_realtime_chunk(s, ops, phase.slots > 0 ? phase.slots : cfg.slots, m, state);
             break;
         case GeneratedPhaseKind::LatencyLoop:
-            generated_latency_loop_chunk(s, ops, m);
+            generated_latency_loop_chunk(s, ops, cfg, m);
             break;
     }
 }
@@ -1096,24 +1095,26 @@ static void run_generated_realtime(const StrategyDescriptor& s,
                                    GeneratedMetrics& m) {
     int phase_count = static_cast<int>(phases.size()) * std::max(1, cfg.phase_repeat);
     int phase_index = 0;
-    int tick_ms = std::max(10, std::min(100, cfg.phase_ms));
-    int ops_per_tick = std::max(1, cfg.target_ops_per_sec * tick_ms / 1000);
     for (int repeat = 0; repeat < std::max(1, cfg.phase_repeat); ++repeat) {
         for (size_t i = 0; i < phases.size(); ++i, ++phase_index) {
             const GeneratedPhase& phase = phases[i];
+            int phase_ms = phase.duration_ms > 0 ? phase.duration_ms : cfg.phase_ms;
+            int target_ops = phase.target_ops_per_sec > 0 ? phase.target_ops_per_sec : cfg.target_ops_per_sec;
+            int tick_ms = std::max(10, std::min(100, phase_ms));
+            int ops_per_tick = std::max(1, target_ops * tick_ms / 1000);
             RealtimePhaseState state(cfg.seed + static_cast<unsigned>(phase_index) * 977u);
             double phase_start = now_ms();
             while (true) {
                 double elapsed = now_ms() - phase_start;
-                if (elapsed >= cfg.phase_ms) break;
+                if (elapsed >= phase_ms) break;
                 double tick_start = now_ms();
                 run_realtime_phase_chunk(s, cfg, phase, ops_per_tick, m, state);
                 double after_ops = now_ms();
                 double phase_elapsed = after_ops - phase_start;
                 publish_generated(phase, phase_index, phase_count, m,
-                                  phase_elapsed, static_cast<double>(cfg.phase_ms), true);
+                                  phase_elapsed, static_cast<double>(phase_ms), true);
                 double spent = now_ms() - tick_start;
-                double remaining = static_cast<double>(cfg.phase_ms) - (now_ms() - phase_start);
+                double remaining = static_cast<double>(phase_ms) - (now_ms() - phase_start);
                 double sleep_ms = std::min(static_cast<double>(tick_ms) - spent, remaining);
                 if (sleep_ms > 0.0) {
                     usleep(static_cast<useconds_t>(sleep_ms * 1000.0));
@@ -1121,22 +1122,28 @@ static void run_generated_realtime(const StrategyDescriptor& s,
             }
             cleanup_realtime_state(s, m, state);
             publish_generated(phase, phase_index, phase_count, m,
-                              static_cast<double>(cfg.phase_ms), static_cast<double>(cfg.phase_ms), true);
+                              static_cast<double>(phase_ms), static_cast<double>(phase_ms), true);
         }
     }
 }
 
 static BenchResult generated_workload(const StrategyDescriptor& s,
                                       const BenchConfig& cfg) {
-    std::vector<GeneratedPhase> phases = generated_template(cfg.workload_template);
+    std::string workload_name = cfg.workload_template;
+    std::vector<GeneratedPhase> phases = cfg.workload_config.empty()
+        ? generated_template(cfg.workload_template)
+        : load_generated_config(cfg.workload_config, workload_name);
+    if (phases.empty()) {
+        phases = generated_template(cfg.workload_template);
+    }
     int total_weight = 0;
     for (const auto& p : phases) total_weight += p.weight;
     total_weight = std::max(1, total_weight);
     GeneratedMetrics m;
-    set_workload_identity(s.name, "generated_workload", cfg.workload_template.c_str());
+    set_workload_identity(s.name, "generated_workload", workload_name.c_str());
     g_workload_start_ms = now_ms();
     int total_phase_count = static_cast<int>(phases.size()) * std::max(1, cfg.phase_repeat);
-    update_workload_snapshot("starting", 0, total_phase_count, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    update_workload_snapshot("starting", 0, total_phase_count, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                              0.0, cfg.workload_realtime ? static_cast<double>(cfg.phase_ms) : 0.0, true);
     double start = now_ms();
     if (cfg.workload_realtime) {
@@ -1145,17 +1152,19 @@ static BenchResult generated_workload(const StrategyDescriptor& s,
         for (size_t i = 0; i < phases.size(); ++i) {
             const GeneratedPhase& phase = phases[i];
             int ops = std::max(1, cfg.iters * phase.weight / total_weight);
+            int phase_slots = phase.slots > 0 ? phase.slots : cfg.slots;
+            int phase_threads = phase.threads > 0 ? phase.threads : cfg.threads;
             publish_generated(phase, static_cast<int>(i), static_cast<int>(phases.size()), m, 0.0, 0.0, true);
             switch (phase.kind) {
                 case GeneratedPhaseKind::SmallChurn:
                     generated_small_churn(s, ops, m, phase, static_cast<int>(i), static_cast<int>(phases.size()));
                     break;
                 case GeneratedPhaseKind::FragmentationDrift:
-                    generated_fragmentation(s, ops, cfg.slots, cfg.seed, m, phase,
+                    generated_fragmentation(s, ops, phase_slots, cfg.seed, m, phase,
                                             static_cast<int>(i), static_cast<int>(phases.size()));
                     break;
                 case GeneratedPhaseKind::RemoteFree:
-                    generated_remote_free(s, ops, cfg.threads, cfg.seed, m, phase,
+                    generated_remote_free(s, ops, phase_threads, cfg.seed, m, phase,
                                           static_cast<int>(i), static_cast<int>(phases.size()));
                     break;
                 case GeneratedPhaseKind::LargeBurst:
@@ -1163,7 +1172,7 @@ static BenchResult generated_workload(const StrategyDescriptor& s,
                                           static_cast<int>(i), static_cast<int>(phases.size()));
                     break;
                 case GeneratedPhaseKind::PeakRelease:
-                    generated_peak_release(s, ops, cfg.slots, m, phase,
+                    generated_peak_release(s, ops, phase_slots, m, phase,
                                            static_cast<int>(i), static_cast<int>(phases.size()));
                     break;
                 case GeneratedPhaseKind::LatencyLoop:
@@ -1176,9 +1185,10 @@ static BenchResult generated_workload(const StrategyDescriptor& s,
     update_workload_snapshot("finished", total_phase_count, total_phase_count,
                              m.ops, m.allocs, m.frees, m.reallocs, m.remote_frees,
                              m.requested_bytes, m.live_objects, m.live_bytes, m.peak_live_bytes,
+                             m.validation_checks, m.validation_errors,
                              0.0, 0.0, false);
     return {"generated_workload", end - start, static_cast<size_t>(m.ops), peak_rss_kb(),
-            generated_extra_json(cfg.workload_template, m)};
+            generated_extra_json(workload_name, m)};
 }
 
 static RepeatSummary summarize(const std::vector<double>& values) {
@@ -1329,10 +1339,13 @@ static void print_usage(const char* argv0) {
         "  --workload-template N adaptive_mix, throughput_churn, remote_queue,\n"
         "                        large_burst, rss_peak_release, fragmentation_drift,\n"
         "                        latency_loop\n"
+        "  --workload-config P   JSON phase config for generated_workload\n"
         "  --workload-realtime   run generated_workload by wall-clock phase time\n"
         "  --phase-ms N          realtime generated_workload phase duration (default: 10000)\n"
         "  --target-ops-per-sec N realtime generated_workload throttle target (default: 50000)\n"
         "  --phase-repeat N      realtime generated_workload template repetitions\n"
+        "  --payload-validation  sample deterministic payload checks in generated_workload\n"
+        "  --payload-validation-rate N check every N generated operations (default: 64)\n"
         "  --telemetry-port N    serve lightweight local workload UI on 127.0.0.1:N\n"
         "  --telemetry-hold-ms N keep telemetry UI alive after benchmarks finish\n"
         "                        when --telemetry-port is enabled (default: 300000; 0 exits immediately)\n"
@@ -1422,6 +1435,10 @@ static bool parse_args(int argc, char** argv, BenchConfig& cfg) {
             const char* v = need_value(arg);
             if (!v) return false;
             cfg.workload_template = v;
+        } else if (std::strcmp(arg, "--workload-config") == 0) {
+            const char* v = need_value(arg);
+            if (!v) return false;
+            cfg.workload_config = v;
         } else if (std::strcmp(arg, "--workload-realtime") == 0) {
             cfg.workload_realtime = true;
         } else if (std::strcmp(arg, "--phase-ms") == 0) {
@@ -1433,6 +1450,11 @@ static bool parse_args(int argc, char** argv, BenchConfig& cfg) {
         } else if (std::strcmp(arg, "--phase-repeat") == 0) {
             const char* v = need_value(arg);
             if (!v || !parse_int_arg(v, cfg.phase_repeat)) return false;
+        } else if (std::strcmp(arg, "--payload-validation") == 0) {
+            cfg.payload_validation = true;
+        } else if (std::strcmp(arg, "--payload-validation-rate") == 0) {
+            const char* v = need_value(arg);
+            if (!v || !parse_int_arg(v, cfg.payload_validation_rate)) return false;
         } else if (std::strcmp(arg, "--telemetry-port") == 0) {
             const char* v = need_value(arg);
             if (!v || !parse_int_arg(v, cfg.telemetry_port)) return false;
@@ -1561,7 +1583,7 @@ int main(int argc, char** argv) {
     if (!load_strategy(cfg.strategy.c_str(), loaded)) return 2;
     if (loaded.desc.vtable.init) loaded.desc.vtable.init();
 
-    TelemetryServer telemetry_server;
+    TelemetryServer telemetry_server(telemetry_snapshot_json, WEB_VIEWER_DIR);
     if (cfg.telemetry_port > 0) {
         set_workload_identity(loaded.desc.name, "idle", cfg.workload_template.c_str());
         if (!telemetry_server.start(cfg.telemetry_port)) {

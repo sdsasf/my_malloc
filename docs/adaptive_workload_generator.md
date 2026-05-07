@@ -57,6 +57,49 @@ Global benchmark knobs still apply:
 - `--json`
 - `--repeats`
 
+## JSON Workload Config
+
+`generated_workload` can load a phase config instead of a built-in template:
+
+```bash
+./build/bench_runner --strategy adaptive --bench generated_workload \
+  --workload-config workloads/phase_large_to_small.json \
+  --workload-realtime --telemetry-port 8080
+```
+
+The first config format is intentionally small and deterministic. Each phase
+can specify:
+
+| Field | Meaning |
+|---|---|
+| `name` | Phase name shown in JSON and the Web UI |
+| `kind` | `small_churn`, `fragmentation_drift`, `remote_free`, `large_burst`, `peak_release`, or `latency_loop` |
+| `duration_ms` | Realtime duration for this phase |
+| `target_ops_per_sec` | Realtime operation throttle for this phase |
+| `slots` | Live pointer slots for slot-based phases |
+| `threads` | Worker threads for remote-free phases |
+| `min_size` / `max_size` | Reserved size-distribution bounds for configurable phase policies |
+
+The current implementation uses `kind`, duration, target ops/sec, slots, and
+threads. Richer size distributions and op-mix policies are reserved for the
+next config version.
+
+## Payload Validation
+
+Generated workloads can also sample deterministic payload checks:
+
+```bash
+./build/bench_runner --strategy adaptive --bench generated_workload \
+  --workload-template adaptive_mix --payload-validation \
+  --payload-validation-rate 16 --json
+```
+
+The generator writes a deterministic byte pattern after allocation and samples
+checks before freeing selected allocations. JSON output includes
+`validation_checks` and `validation_errors`. This is meant to catch allocator
+payload corruption during generated workloads without turning every run into a
+heavy correctness test.
+
 ## Benchmark Mode vs Realtime Mode
 
 By default, `generated_workload` runs as a benchmark and completes as fast as
@@ -100,7 +143,9 @@ All strategies include a `generated` object:
     "reallocs": 5000,
     "remote_frees": 3332,
     "requested_bytes": 527229532,
-    "peak_live_bytes": 26162512
+    "peak_live_bytes": 26162512,
+    "validation_checks": 0,
+    "validation_errors": 0
   }
 }
 ```
