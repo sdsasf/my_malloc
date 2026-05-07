@@ -5,7 +5,8 @@ workload runs:
 
 ```bash
 ./build/bench_runner --strategy adaptive --bench generated_workload \
-  --workload-template adaptive_mix --iters 200000 --slots 4096 --threads 4 \
+  --workload-template adaptive_mix \
+  --workload-realtime --phase-ms 10000 --target-ops-per-sec 50000 \
   --telemetry-port 8080
 ```
 
@@ -19,8 +20,13 @@ The UI also works for non-adaptive strategies:
 
 ```bash
 ./build/bench_runner --strategy ptmalloc --bench generated_workload \
-  --workload-template adaptive_mix --telemetry-port 8080
+  --workload-template adaptive_mix --workload-realtime --phase-ms 10000 \
+  --telemetry-port 8080
 ```
+
+Without `--workload-realtime`, generated workloads run as fast benchmarks and
+may finish before the browser shows useful phase changes. Use realtime mode for
+watching dynamic behavior.
 
 When `--telemetry-port` is enabled and output is not JSON, `bench_runner` keeps
 the local UI server alive for five minutes after the workload finishes. This
@@ -30,7 +36,8 @@ behavior, or pass a larger value for longer inspection:
 
 ```bash
 ./build/bench_runner --strategy adaptive --bench generated_workload \
-  --workload-template adaptive_mix --telemetry-port 8080 --telemetry-hold-ms 600000
+  --workload-template adaptive_mix --workload-realtime --phase-ms 10000 \
+  --target-ops-per-sec 50000 --telemetry-port 8080 --telemetry-hold-ms 600000
 ```
 
 For non-adaptive strategies, the page shows workload phase, ops/sec, live-set
@@ -38,6 +45,11 @@ estimates, requested bytes, remote-free count, and peak RSS. For adaptive runs,
 it also shows current mode, previous mode, mode switches, mapped/live ratio,
 remote-free ratio, large-object ratio, fragmentation estimate, slow-path ratio,
 and safety counters.
+
+The page is a warm-toned realtime dashboard with a phase progress track, core
+metric cards, grouped workload/adaptive tables, and a lightweight canvas chart
+for ops/sec, live memory, and mapped memory. It is still a single embedded page
+served by `bench_runner`; no frontend assets or dependencies are loaded.
 
 ## Isolation Rules
 
@@ -80,6 +92,9 @@ The server binds only to `127.0.0.1`.
     "phase_index": 3,
     "phase_count": 6,
     "running": true,
+    "phase_elapsed_ms": 4200,
+    "phase_duration_ms": 10000,
+    "phase_progress": 0.42,
     "ops_per_sec": 250000,
     "allocs": 10000,
     "frees": 9800,

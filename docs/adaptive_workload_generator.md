@@ -57,6 +57,33 @@ Global benchmark knobs still apply:
 - `--json`
 - `--repeats`
 
+## Benchmark Mode vs Realtime Mode
+
+By default, `generated_workload` runs as a benchmark and completes as fast as
+possible. This is the right mode for allocator comparisons.
+
+For visualization, use realtime mode:
+
+```bash
+./build/bench_runner --strategy adaptive --bench generated_workload \
+  --workload-template adaptive_mix \
+  --workload-realtime --phase-ms 10000 --target-ops-per-sec 50000 \
+  --telemetry-port 8080
+```
+
+Realtime options:
+
+| Option | Meaning |
+|---|---|
+| `--workload-realtime` | Run phases by wall-clock time instead of completing as fast as possible |
+| `--phase-ms N` | Duration of each generated phase in milliseconds |
+| `--target-ops-per-sec N` | Approximate throttle target for generated operations |
+| `--phase-repeat N` | Repeat the template multiple times to observe selector stability |
+
+Realtime mode still uses the same `StrategyDescriptor` path as benchmark mode,
+so fixed allocators and `adaptive` remain comparable. It is intended for
+observation, not for throughput measurement.
+
 ## JSON Output
 
 All strategies include a `generated` object:

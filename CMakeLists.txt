@@ -155,6 +155,11 @@ target_compile_options(bench_runner PRIVATE -O2 -march=native)
 add_test(NAME generated_workload_adaptive
          COMMAND bench_runner --strategy adaptive --bench generated_workload
                  --workload-template adaptive_mix --iters 5000 --slots 256 --threads 2 --json)
+add_test(NAME generated_workload_realtime_adaptive
+         COMMAND bench_runner --strategy adaptive --bench generated_workload
+                 --workload-template adaptive_mix --workload-realtime
+                 --phase-ms 50 --target-ops-per-sec 5000 --phase-repeat 1
+                 --slots 128 --threads 2 --json)
 add_test(NAME generated_workload_ptmalloc
          COMMAND bench_runner --strategy ptmalloc --bench generated_workload
                  --workload-template adaptive_mix --iters 5000 --slots 256 --threads 2 --json)

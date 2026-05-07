@@ -51,6 +51,10 @@ struct BenchConfig {
     int repeats = 1;
     unsigned seed = 12345;
     std::string workload_template = "adaptive_mix";
+    bool workload_realtime = false;
+    int phase_ms = 10000;
+    int target_ops_per_sec = 50000;
+    int phase_repeat = 1;
     int telemetry_port = 0;
     int telemetry_hold_ms = 300000;
 };
@@ -93,6 +97,9 @@ struct WorkloadSnapshot {
     uint64_t live_bytes = 0;
     uint64_t peak_live_bytes = 0;
     double elapsed_ms = 0.0;
+    double phase_elapsed_ms = 0.0;
+    double phase_duration_ms = 0.0;
+    double phase_progress = 0.0;
     bool running = false;
 };
 
@@ -121,6 +128,8 @@ static void update_workload_snapshot(const char* phase,
                                      uint64_t live_objects,
                                      uint64_t live_bytes,
                                      uint64_t peak_live_bytes,
+                                     double phase_elapsed_ms,
+                                     double phase_duration_ms,
                                      bool running) {
     std::lock_guard<std::mutex> lock(g_workload_snapshot_mutex);
     std::snprintf(g_workload_snapshot.phase, sizeof(g_workload_snapshot.phase), "%s", phase);
@@ -136,6 +145,11 @@ static void update_workload_snapshot(const char* phase,
     g_workload_snapshot.live_bytes = live_bytes;
     g_workload_snapshot.peak_live_bytes = peak_live_bytes;
     g_workload_snapshot.elapsed_ms = g_workload_start_ms > 0.0 ? now_ms() - g_workload_start_ms : 0.0;
+    g_workload_snapshot.phase_elapsed_ms = phase_elapsed_ms;
+    g_workload_snapshot.phase_duration_ms = phase_duration_ms;
+    g_workload_snapshot.phase_progress = phase_duration_ms > 0.0
+        ? std::min(1.0, phase_elapsed_ms / phase_duration_ms)
+        : 0.0;
     g_workload_snapshot.running = running;
 }
 
@@ -171,6 +185,9 @@ static std::string telemetry_snapshot_json() {
        << ",\"live_objects\":" << w.live_objects
        << ",\"live_bytes\":" << w.live_bytes
        << ",\"peak_live_bytes\":" << w.peak_live_bytes
+       << ",\"phase_elapsed_ms\":" << w.phase_elapsed_ms
+       << ",\"phase_duration_ms\":" << w.phase_duration_ms
+       << ",\"phase_progress\":" << w.phase_progress
        << ",\"peak_rss_kb\":" << peak_rss_kb()
        << "}";
     if (std::strcmp(w.strategy, "adaptive") == 0) {
@@ -201,43 +218,87 @@ static const char* telemetry_html() {
 <meta charset="utf-8">
 <title>adaptive workload viewer</title>
 <style>
-body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#101418;color:#e8edf2}
-header{padding:14px 18px;background:#18202a;border-bottom:1px solid #2a3440}
-h1{font-size:18px;margin:0}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:14px}
-.card{background:#18202a;border:1px solid #2a3440;border-radius:6px;padding:12px}.label{color:#9fb0c3;font-size:12px}.value{font-size:22px;margin-top:4px}
-canvas{width:100%;height:220px;background:#0b0f14;border:1px solid #2a3440;border-radius:6px}
-.wide{grid-column:span 4}table{width:100%;border-collapse:collapse}td{padding:4px 0;border-bottom:1px solid #26313d}
+:root{color-scheme:dark;--bg:#1c1510;--panel:#2a2119;--panel2:#34281e;--line:#5d4633;--text:#fff3e2;--muted:#c7a989;--hot:#f2a65a;--gold:#f6c85f;--ember:#df6f44;--green:#83c26b;--red:#d85c4a}
+*{box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:var(--bg);color:var(--text)}
+header{padding:18px 22px;background:#241a13;border-bottom:1px solid var(--line)}
+h1{font-size:20px;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:4px}
+.wrap{padding:16px;max-width:1280px;margin:0 auto}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;box-shadow:0 10px 24px rgba(0,0,0,.18)}
+.hero{grid-column:span 4;background:var(--panel2);display:grid;grid-template-columns:1.2fr 1fr;gap:16px;align-items:center}
+.label{color:var(--muted);font-size:12px}.value{font-size:24px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.big{font-size:34px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:5px 10px;color:#ffe0b3;background:#3a2a1d;font-size:12px;margin-right:6px}
+.phase-track{height:16px;background:#463323;border:1px solid var(--line);border-radius:999px;overflow:hidden;margin-top:12px}.phase-fill{height:100%;width:0;background:var(--gold)}
+.phase-row{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;margin-top:12px}.phase-cell{height:10px;border-radius:999px;background:#4b3728}.phase-cell.active{background:var(--hot)}
+canvas{width:100%;height:260px;background:#18100b;border:1px solid var(--line);border-radius:8px}
+.wide{grid-column:span 4}.span2{grid-column:span 2}.legend{display:flex;gap:12px;color:var(--muted);font-size:12px;margin-top:10px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
+table{width:100%;border-collapse:collapse}td{padding:7px 0;border-bottom:1px solid #463323}td:first-child{color:var(--muted)}td:last-child{text-align:right;color:#ffe0b3}
+@media(max-width:800px){.grid{grid-template-columns:1fr}.hero,.wide,.span2{grid-column:span 1}.hero{grid-template-columns:1fr}.value{font-size:20px}.big{font-size:28px}}
 </style>
 </head>
 <body>
-<header><h1>Generated Workload Telemetry</h1></header>
-<div class="grid">
-<div class="card"><div class="label">strategy</div><div id="strategy" class="value">-</div></div>
-<div class="card"><div class="label">phase</div><div id="phase" class="value">-</div></div>
+<header><h1>Generated Workload Telemetry</h1><div class="sub">Realtime allocator workload and adaptive mode view</div></header>
+<div class="wrap"><div class="grid">
+<div class="card hero">
+  <div>
+    <div><span id="running" class="pill">starting</span><span id="modepill" class="pill">mode -</span></div>
+    <div class="label" style="margin-top:14px">current phase</div>
+    <div id="phase" class="value big">-</div>
+    <div class="phase-track"><div id="phasebar" class="phase-fill"></div></div>
+    <div id="phases" class="phase-row"></div>
+  </div>
+  <div>
+    <div class="label">strategy</div><div id="strategy" class="value">-</div>
+    <div class="label" style="margin-top:14px">template</div><div id="template" class="value">-</div>
+  </div>
+</div>
 <div class="card"><div class="label">ops/sec</div><div id="ops" class="value">0</div></div>
 <div class="card"><div class="label">live bytes</div><div id="live" class="value">0</div></div>
-<div class="card wide"><canvas id="chart" width="1000" height="220"></canvas></div>
-<div class="card wide"><table id="metrics"></table></div>
+<div class="card"><div class="label">mode switches</div><div id="switches" class="value">0</div></div>
+<div class="card"><div class="label">peak RSS KB</div><div id="rss" class="value">0</div></div>
+<div class="card wide"><canvas id="chart" width="1180" height="260"></canvas><div class="legend"><span><i class="dot" style="background:#f2a65a"></i>ops/sec</span><span><i class="dot" style="background:#83c26b"></i>live KB</span><span><i class="dot" style="background:#df6f44"></i>mapped KB</span></div></div>
+<div class="card span2"><table id="workloadMetrics"></table></div>
+<div class="card span2"><table id="adaptiveMetrics"></table></div>
+</div>
 </div>
 <script>
 const hist=[]; const maxN=240;
-function fmt(n){return Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2});}
+function fmt(n){if(typeof n==='boolean')return n?'yes':'no';return Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2});}
 function draw(){
  const c=document.getElementById('chart'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);
+ ctx.fillStyle='#18100b';ctx.fillRect(0,0,c.width,c.height);
+ ctx.strokeStyle='#3b2a1d';ctx.lineWidth=1;
+ for(let i=1;i<5;i++){const y=i*c.height/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(c.width,y);ctx.stroke();}
  const max=Math.max(1,...hist.map(x=>Math.max(x.ops,x.live/1024,x.mapped/1024)));
- function line(key,color){ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=2;hist.forEach((p,i)=>{const x=i*(c.width/Math.max(1,maxN-1));const y=c.height-(p[key]/max)*c.height;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);});ctx.stroke();}
- line('ops','#66d9ef');line('live','#a6e22e');line('mapped','#f92672');
+ function line(key,color){ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=3;hist.forEach((p,i)=>{const x=i*(c.width/Math.max(1,maxN-1));const y=c.height-(p[key]/max)*c.height;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);});ctx.stroke();}
+ line('mapped','#df6f44');line('live','#83c26b');line('ops','#f2a65a');
+ const last=hist[hist.length-1]; if(last){ctx.fillStyle='#c7a989';ctx.font='13px system-ui';ctx.fillText('max scale '+fmt(max),12,22);}
+}
+function phaseCells(index,count){
+ let html=''; const n=Math.max(1,Math.min(24,count||1));
+ for(let i=0;i<n;i++){const active=i<=index*n/Math.max(1,count);html+='<div class="phase-cell '+(active?'active':'')+'"></div>';}
+ document.getElementById('phases').innerHTML=html;
+}
+function rows(items){return items.map(x=>'<tr><td>'+x[0]+'</td><td>'+fmt(x[1])+'</td></tr>').join('');}
+function setRunPill(running){
+ const el=document.getElementById('running');el.textContent=running?'running':'finished';el.style.background=running?'#5a341f':'#34301f';el.style.color=running?'#ffd19a':'#d7cdb1';
 }
 async function poll(){
  try{
   const r=await fetch('/snapshot',{cache:'no-store'}); const j=await r.json(); const w=j.workload, a=j.adaptive||{};
-  document.getElementById('strategy').textContent=w.strategy+(a.current_mode?' / '+a.current_mode:'');
+  document.getElementById('strategy').textContent=w.strategy;
+  document.getElementById('template').textContent=w.template;
+  document.getElementById('modepill').textContent=a.current_mode?'mode '+a.current_mode:'mode n/a';
+  setRunPill(!!w.running);
   document.getElementById('phase').textContent=(w.phase_index+1)+'/'+w.phase_count+' '+w.phase;
+  document.getElementById('phasebar').style.width=Math.max(0,Math.min(100,(w.phase_progress||0)*100))+'%';
+  phaseCells(w.phase_index,w.phase_count);
   document.getElementById('ops').textContent=fmt(w.ops_per_sec);
   document.getElementById('live').textContent=fmt(w.live_bytes);
+  document.getElementById('switches').textContent=fmt(a.mode_switches);
+  document.getElementById('rss').textContent=fmt(w.peak_rss_kb);
   hist.push({ops:w.ops_per_sec||0,live:w.live_bytes||0,mapped:a.mapped_bytes||0}); if(hist.length>maxN)hist.shift(); draw();
-  const rows=[['template',w.template],['running',w.running],['alloc/free/realloc',w.allocs+' / '+w.frees+' / '+w.reallocs],['remote frees',w.remote_frees],['requested bytes',w.requested_bytes],['peak live bytes',w.peak_live_bytes],['peak RSS KB',w.peak_rss_kb],['mode switches',a.mode_switches],['mapped/live',a.mapped_live_ratio],['remote ratio',a.remote_free_ratio],['large ratio',a.large_bytes_ratio],['fragmentation',a.fragmentation_estimate],['slow path',a.slow_path_ratio],['safety errors',(a.invalid_free_count||0)+' / '+(a.double_free_count||0)]];
-  document.getElementById('metrics').innerHTML=rows.map(x=>'<tr><td>'+x[0]+'</td><td>'+fmt(x[1])+'</td></tr>').join('');
+  document.getElementById('workloadMetrics').innerHTML=rows([['phase elapsed ms',w.phase_elapsed_ms],['phase duration ms',w.phase_duration_ms],['alloc/free/realloc',w.allocs+' / '+w.frees+' / '+w.reallocs],['remote frees',w.remote_frees],['requested bytes',w.requested_bytes],['peak live bytes',w.peak_live_bytes]]);
+  document.getElementById('adaptiveMetrics').innerHTML=rows([['previous mode',a.previous_mode||'n/a'],['mapped/live',a.mapped_live_ratio],['remote ratio',a.remote_free_ratio],['large ratio',a.large_bytes_ratio],['fragmentation',a.fragmentation_estimate],['slow path',a.slow_path_ratio],['safety errors',(a.invalid_free_count||0)+' / '+(a.double_free_count||0)]]);
  }catch(e){}
 }
 setInterval(poll,250); poll();
@@ -651,10 +712,13 @@ static void publish_generated(const GeneratedPhase& phase,
                               int phase_index,
                               int phase_count,
                               const GeneratedMetrics& m,
-                              bool running) {
+                              double phase_elapsed_ms = 0.0,
+                              double phase_duration_ms = 0.0,
+                              bool running = true) {
     update_workload_snapshot(phase.name, phase_index, phase_count, m.ops, m.allocs, m.frees,
                              m.reallocs, m.remote_frees, m.requested_bytes, m.live_objects,
-                             m.live_bytes, m.peak_live_bytes, running);
+                             m.live_bytes, m.peak_live_bytes, phase_elapsed_ms,
+                             phase_duration_ms, running);
 }
 
 static void generated_small_churn(const StrategyDescriptor& s,
@@ -670,7 +734,20 @@ static void generated_small_churn(const StrategyDescriptor& s,
         metrics_alloc(m, size);
         s.vtable.deallocate(p);
         metrics_free(m, size);
-        if ((i & 1023) == 0) publish_generated(phase, phase_index, phase_count, m, true);
+        if ((i & 1023) == 0) publish_generated(phase, phase_index, phase_count, m, 0.0, 0.0, true);
+    }
+}
+
+static void generated_small_churn_chunk(const StrategyDescriptor& s,
+                                        int ops,
+                                        GeneratedMetrics& m) {
+    for (int i = 0; i < ops; ++i) {
+        size_t size = 32 + static_cast<size_t>((m.ops + static_cast<uint64_t>(i)) % 8) * 16;
+        void* p = s.vtable.allocate(size);
+        touch_bytes(p, size, 0x31);
+        metrics_alloc(m, size);
+        s.vtable.deallocate(p);
+        metrics_free(m, size);
     }
 }
 
@@ -686,7 +763,19 @@ static void generated_latency_loop(const StrategyDescriptor& s,
         metrics_alloc(m, 64);
         s.vtable.deallocate(p);
         metrics_free(m, 64);
-        if ((i & 2047) == 0) publish_generated(phase, phase_index, phase_count, m, true);
+        if ((i & 2047) == 0) publish_generated(phase, phase_index, phase_count, m, 0.0, 0.0, true);
+    }
+}
+
+static void generated_latency_loop_chunk(const StrategyDescriptor& s,
+                                         int ops,
+                                         GeneratedMetrics& m) {
+    for (int i = 0; i < ops; ++i) {
+        void* p = s.vtable.allocate(64);
+        touch_bytes(p, 64, 0x32);
+        metrics_alloc(m, 64);
+        s.vtable.deallocate(p);
+        metrics_free(m, 64);
     }
 }
 
@@ -720,7 +809,7 @@ static void generated_fragmentation(const StrategyDescriptor& s,
             touch_bytes(next, next_size, 0x24);
             metrics_realloc(m, old_size, next_size);
         }
-        if ((i & 511) == 0) publish_generated(phase, phase_index, phase_count, m, true);
+        if ((i & 511) == 0) publish_generated(phase, phase_index, phase_count, m, 0.0, 0.0, true);
     }
     for (int i = 0; i < slots; ++i) {
         if (ptrs[static_cast<size_t>(i)]) {
@@ -743,7 +832,20 @@ static void generated_large_burst(const StrategyDescriptor& s,
         metrics_alloc(m, size);
         s.vtable.deallocate(p);
         metrics_free(m, size);
-        if ((i & 127) == 0) publish_generated(phase, phase_index, phase_count, m, true);
+        if ((i & 127) == 0) publish_generated(phase, phase_index, phase_count, m, 0.0, 0.0, true);
+    }
+}
+
+static void generated_large_burst_chunk(const StrategyDescriptor& s,
+                                        int ops,
+                                        GeneratedMetrics& m) {
+    for (int i = 0; i < ops; ++i) {
+        size_t size = 64 * 1024 + static_cast<size_t>((m.allocs + static_cast<uint64_t>(i)) % 16) * 64 * 1024;
+        void* p = s.vtable.allocate(size);
+        touch_bytes(p, size, 0x35);
+        metrics_alloc(m, size);
+        s.vtable.deallocate(p);
+        metrics_free(m, size);
     }
 }
 
@@ -762,12 +864,12 @@ static void generated_peak_release(const StrategyDescriptor& s,
         ptrs[static_cast<size_t>(i)] = s.vtable.allocate(sizes[static_cast<size_t>(i)]);
         touch_bytes(ptrs[static_cast<size_t>(i)], sizes[static_cast<size_t>(i)], 0x26);
         metrics_alloc(m, sizes[static_cast<size_t>(i)]);
-        if ((i & 255) == 0) publish_generated(phase, phase_index, phase_count, m, true);
+        if ((i & 255) == 0) publish_generated(phase, phase_index, phase_count, m, 0.0, 0.0, true);
     }
     for (int i = 0; i < slots; ++i) {
         s.vtable.deallocate(ptrs[static_cast<size_t>(i)]);
         metrics_free(m, sizes[static_cast<size_t>(i)]);
-        if ((i & 255) == 0) publish_generated(phase, phase_index, phase_count, m, true);
+        if ((i & 255) == 0) publish_generated(phase, phase_index, phase_count, m, 0.0, 0.0, true);
     }
 }
 
@@ -811,7 +913,7 @@ static void generated_remote_free(const StrategyDescriptor& s,
         m.live_bytes += lm.live_bytes;
         m.peak_live_bytes = std::max(m.peak_live_bytes, m.live_bytes);
     }
-    publish_generated(phase, phase_index, phase_count, m, true);
+    publish_generated(phase, phase_index, phase_count, m, 0.0, 0.0, true);
 
     std::vector<std::thread> consumers;
     for (int t = 0; t < threads; ++t) {
@@ -828,7 +930,7 @@ static void generated_remote_free(const StrategyDescriptor& s,
             metrics_free(m, sizes[static_cast<size_t>(t)][static_cast<size_t>(i)], true);
         }
     }
-    publish_generated(phase, phase_index, phase_count, m, true);
+    publish_generated(phase, phase_index, phase_count, m, 0.0, 0.0, true);
 }
 
 static std::string generated_extra_json(const std::string& templ, const GeneratedMetrics& m) {
@@ -847,6 +949,180 @@ static std::string generated_extra_json(const std::string& templ, const Generate
     return buf;
 }
 
+struct RealtimePhaseState {
+    std::vector<void*> ptrs;
+    std::vector<size_t> sizes;
+    std::mt19937 rng;
+    bool initialized = false;
+
+    explicit RealtimePhaseState(unsigned seed) : rng(seed) {}
+};
+
+static void generated_fragmentation_realtime_chunk(const StrategyDescriptor& s,
+                                                   int ops,
+                                                   int slots,
+                                                   GeneratedMetrics& m,
+                                                   RealtimePhaseState& state) {
+    slots = std::max(16, slots);
+    if (!state.initialized) {
+        state.ptrs.assign(static_cast<size_t>(slots), nullptr);
+        state.sizes.assign(static_cast<size_t>(slots), 0);
+        std::uniform_int_distribution<size_t> size_dist(128, 96 * 1024);
+        for (int i = 0; i < slots; ++i) {
+            size_t size = size_dist(state.rng);
+            state.sizes[static_cast<size_t>(i)] = size;
+            state.ptrs[static_cast<size_t>(i)] = s.vtable.allocate(size);
+            touch_bytes(state.ptrs[static_cast<size_t>(i)], size, 0x41);
+            metrics_alloc(m, size);
+        }
+        state.initialized = true;
+    }
+    std::uniform_int_distribution<size_t> size_dist(128, 96 * 1024);
+    for (int i = 0; i < ops; ++i) {
+        size_t idx = static_cast<size_t>(state.rng() % state.ptrs.size());
+        size_t old_size = state.sizes[idx];
+        size_t next_size = size_dist(state.rng);
+        void* next = s.vtable.reallocate(state.ptrs[idx], next_size);
+        if (next) {
+            state.ptrs[idx] = next;
+            state.sizes[idx] = next_size;
+            touch_bytes(next, next_size, 0x42);
+            metrics_realloc(m, old_size, next_size);
+        }
+    }
+}
+
+static void generated_peak_release_realtime_chunk(const StrategyDescriptor& s,
+                                                  int ops,
+                                                  int slots,
+                                                  GeneratedMetrics& m,
+                                                  RealtimePhaseState& state) {
+    slots = std::max(16, slots);
+    if (!state.initialized) {
+        state.ptrs.assign(static_cast<size_t>(slots), nullptr);
+        state.sizes.assign(static_cast<size_t>(slots), 0);
+        state.initialized = true;
+    }
+    for (int i = 0; i < ops; ++i) {
+        size_t idx = static_cast<size_t>((m.ops + static_cast<uint64_t>(i)) % state.ptrs.size());
+        if (!state.ptrs[idx]) {
+            size_t size = 1024 + (idx % 64) * 1024;
+            state.sizes[idx] = size;
+            state.ptrs[idx] = s.vtable.allocate(size);
+            touch_bytes(state.ptrs[idx], size, 0x43);
+            metrics_alloc(m, size);
+        } else {
+            s.vtable.deallocate(state.ptrs[idx]);
+            metrics_free(m, state.sizes[idx]);
+            state.ptrs[idx] = nullptr;
+            state.sizes[idx] = 0;
+        }
+    }
+}
+
+static void generated_remote_realtime_chunk(const StrategyDescriptor& s,
+                                            int ops,
+                                            int threads,
+                                            GeneratedMetrics& m,
+                                            RealtimePhaseState& state) {
+    threads = std::max(2, threads);
+    int count = std::max(1, ops / 2);
+    std::vector<void*> ptrs(static_cast<size_t>(count), nullptr);
+    std::vector<size_t> sizes(static_cast<size_t>(count), 0);
+    std::uniform_int_distribution<size_t> size_dist(64, 4096);
+    std::thread producer([&] {
+        for (int i = 0; i < count; ++i) {
+            sizes[static_cast<size_t>(i)] = size_dist(state.rng);
+            ptrs[static_cast<size_t>(i)] = s.vtable.allocate(sizes[static_cast<size_t>(i)]);
+            touch_bytes(ptrs[static_cast<size_t>(i)], sizes[static_cast<size_t>(i)], 0x44);
+        }
+    });
+    producer.join();
+    for (int i = 0; i < count; ++i) metrics_alloc(m, sizes[static_cast<size_t>(i)]);
+    std::thread consumer([&] {
+        for (void* p : ptrs) s.vtable.deallocate(p);
+    });
+    consumer.join();
+    for (int i = 0; i < count; ++i) metrics_free(m, sizes[static_cast<size_t>(i)], true);
+}
+
+static void cleanup_realtime_state(const StrategyDescriptor& s,
+                                   GeneratedMetrics& m,
+                                   RealtimePhaseState& state) {
+    for (size_t i = 0; i < state.ptrs.size(); ++i) {
+        if (state.ptrs[i]) {
+            s.vtable.deallocate(state.ptrs[i]);
+            metrics_free(m, state.sizes[i]);
+            state.ptrs[i] = nullptr;
+            state.sizes[i] = 0;
+        }
+    }
+}
+
+static void run_realtime_phase_chunk(const StrategyDescriptor& s,
+                                     const BenchConfig& cfg,
+                                     const GeneratedPhase& phase,
+                                     int ops,
+                                     GeneratedMetrics& m,
+                                     RealtimePhaseState& state) {
+    switch (phase.kind) {
+        case GeneratedPhaseKind::SmallChurn:
+            generated_small_churn_chunk(s, ops, m);
+            break;
+        case GeneratedPhaseKind::FragmentationDrift:
+            generated_fragmentation_realtime_chunk(s, ops, cfg.slots, m, state);
+            break;
+        case GeneratedPhaseKind::RemoteFree:
+            generated_remote_realtime_chunk(s, ops, cfg.threads, m, state);
+            break;
+        case GeneratedPhaseKind::LargeBurst:
+            generated_large_burst_chunk(s, std::max(1, ops / 8), m);
+            break;
+        case GeneratedPhaseKind::PeakRelease:
+            generated_peak_release_realtime_chunk(s, ops, cfg.slots, m, state);
+            break;
+        case GeneratedPhaseKind::LatencyLoop:
+            generated_latency_loop_chunk(s, ops, m);
+            break;
+    }
+}
+
+static void run_generated_realtime(const StrategyDescriptor& s,
+                                   const BenchConfig& cfg,
+                                   const std::vector<GeneratedPhase>& phases,
+                                   GeneratedMetrics& m) {
+    int phase_count = static_cast<int>(phases.size()) * std::max(1, cfg.phase_repeat);
+    int phase_index = 0;
+    int tick_ms = std::max(10, std::min(100, cfg.phase_ms));
+    int ops_per_tick = std::max(1, cfg.target_ops_per_sec * tick_ms / 1000);
+    for (int repeat = 0; repeat < std::max(1, cfg.phase_repeat); ++repeat) {
+        for (size_t i = 0; i < phases.size(); ++i, ++phase_index) {
+            const GeneratedPhase& phase = phases[i];
+            RealtimePhaseState state(cfg.seed + static_cast<unsigned>(phase_index) * 977u);
+            double phase_start = now_ms();
+            while (true) {
+                double elapsed = now_ms() - phase_start;
+                if (elapsed >= cfg.phase_ms) break;
+                double tick_start = now_ms();
+                run_realtime_phase_chunk(s, cfg, phase, ops_per_tick, m, state);
+                double after_ops = now_ms();
+                double phase_elapsed = after_ops - phase_start;
+                publish_generated(phase, phase_index, phase_count, m,
+                                  phase_elapsed, static_cast<double>(cfg.phase_ms), true);
+                double spent = now_ms() - tick_start;
+                double remaining = static_cast<double>(cfg.phase_ms) - (now_ms() - phase_start);
+                double sleep_ms = std::min(static_cast<double>(tick_ms) - spent, remaining);
+                if (sleep_ms > 0.0) {
+                    usleep(static_cast<useconds_t>(sleep_ms * 1000.0));
+                }
+            }
+            cleanup_realtime_state(s, m, state);
+            publish_generated(phase, phase_index, phase_count, m,
+                              static_cast<double>(cfg.phase_ms), static_cast<double>(cfg.phase_ms), true);
+        }
+    }
+}
+
 static BenchResult generated_workload(const StrategyDescriptor& s,
                                       const BenchConfig& cfg) {
     std::vector<GeneratedPhase> phases = generated_template(cfg.workload_template);
@@ -856,41 +1132,48 @@ static BenchResult generated_workload(const StrategyDescriptor& s,
     GeneratedMetrics m;
     set_workload_identity(s.name, "generated_workload", cfg.workload_template.c_str());
     g_workload_start_ms = now_ms();
-    update_workload_snapshot("starting", 0, static_cast<int>(phases.size()), 0, 0, 0, 0, 0, 0, 0, 0, 0, true);
+    int total_phase_count = static_cast<int>(phases.size()) * std::max(1, cfg.phase_repeat);
+    update_workload_snapshot("starting", 0, total_phase_count, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                             0.0, cfg.workload_realtime ? static_cast<double>(cfg.phase_ms) : 0.0, true);
     double start = now_ms();
-    for (size_t i = 0; i < phases.size(); ++i) {
-        const GeneratedPhase& phase = phases[i];
-        int ops = std::max(1, cfg.iters * phase.weight / total_weight);
-        publish_generated(phase, static_cast<int>(i), static_cast<int>(phases.size()), m, true);
-        switch (phase.kind) {
-            case GeneratedPhaseKind::SmallChurn:
-                generated_small_churn(s, ops, m, phase, static_cast<int>(i), static_cast<int>(phases.size()));
-                break;
-            case GeneratedPhaseKind::FragmentationDrift:
-                generated_fragmentation(s, ops, cfg.slots, cfg.seed, m, phase,
-                                        static_cast<int>(i), static_cast<int>(phases.size()));
-                break;
-            case GeneratedPhaseKind::RemoteFree:
-                generated_remote_free(s, ops, cfg.threads, cfg.seed, m, phase,
-                                      static_cast<int>(i), static_cast<int>(phases.size()));
-                break;
-            case GeneratedPhaseKind::LargeBurst:
-                generated_large_burst(s, std::max(1, ops / 8), m, phase,
-                                      static_cast<int>(i), static_cast<int>(phases.size()));
-                break;
-            case GeneratedPhaseKind::PeakRelease:
-                generated_peak_release(s, ops, cfg.slots, m, phase,
-                                       static_cast<int>(i), static_cast<int>(phases.size()));
-                break;
-            case GeneratedPhaseKind::LatencyLoop:
-                generated_latency_loop(s, ops, m, phase, static_cast<int>(i), static_cast<int>(phases.size()));
-                break;
+    if (cfg.workload_realtime) {
+        run_generated_realtime(s, cfg, phases, m);
+    } else {
+        for (size_t i = 0; i < phases.size(); ++i) {
+            const GeneratedPhase& phase = phases[i];
+            int ops = std::max(1, cfg.iters * phase.weight / total_weight);
+            publish_generated(phase, static_cast<int>(i), static_cast<int>(phases.size()), m, 0.0, 0.0, true);
+            switch (phase.kind) {
+                case GeneratedPhaseKind::SmallChurn:
+                    generated_small_churn(s, ops, m, phase, static_cast<int>(i), static_cast<int>(phases.size()));
+                    break;
+                case GeneratedPhaseKind::FragmentationDrift:
+                    generated_fragmentation(s, ops, cfg.slots, cfg.seed, m, phase,
+                                            static_cast<int>(i), static_cast<int>(phases.size()));
+                    break;
+                case GeneratedPhaseKind::RemoteFree:
+                    generated_remote_free(s, ops, cfg.threads, cfg.seed, m, phase,
+                                          static_cast<int>(i), static_cast<int>(phases.size()));
+                    break;
+                case GeneratedPhaseKind::LargeBurst:
+                    generated_large_burst(s, std::max(1, ops / 8), m, phase,
+                                          static_cast<int>(i), static_cast<int>(phases.size()));
+                    break;
+                case GeneratedPhaseKind::PeakRelease:
+                    generated_peak_release(s, ops, cfg.slots, m, phase,
+                                           static_cast<int>(i), static_cast<int>(phases.size()));
+                    break;
+                case GeneratedPhaseKind::LatencyLoop:
+                    generated_latency_loop(s, ops, m, phase, static_cast<int>(i), static_cast<int>(phases.size()));
+                    break;
+            }
         }
     }
     double end = now_ms();
-    update_workload_snapshot("finished", static_cast<int>(phases.size()), static_cast<int>(phases.size()),
+    update_workload_snapshot("finished", total_phase_count, total_phase_count,
                              m.ops, m.allocs, m.frees, m.reallocs, m.remote_frees,
-                             m.requested_bytes, m.live_objects, m.live_bytes, m.peak_live_bytes, false);
+                             m.requested_bytes, m.live_objects, m.live_bytes, m.peak_live_bytes,
+                             0.0, 0.0, false);
     return {"generated_workload", end - start, static_cast<size_t>(m.ops), peak_rss_kb(),
             generated_extra_json(cfg.workload_template, m)};
 }
@@ -1043,6 +1326,10 @@ static void print_usage(const char* argv0) {
         "  --workload-template N adaptive_mix, throughput_churn, remote_queue,\n"
         "                        large_burst, rss_peak_release, fragmentation_drift,\n"
         "                        latency_loop\n"
+        "  --workload-realtime   run generated_workload by wall-clock phase time\n"
+        "  --phase-ms N          realtime generated_workload phase duration (default: 10000)\n"
+        "  --target-ops-per-sec N realtime generated_workload throttle target (default: 50000)\n"
+        "  --phase-repeat N      realtime generated_workload template repetitions\n"
         "  --telemetry-port N    serve lightweight local workload UI on 127.0.0.1:N\n"
         "  --telemetry-hold-ms N keep telemetry UI alive after benchmarks finish\n"
         "                        when --telemetry-port is enabled (default: 300000; 0 exits immediately)\n"
@@ -1132,6 +1419,17 @@ static bool parse_args(int argc, char** argv, BenchConfig& cfg) {
             const char* v = need_value(arg);
             if (!v) return false;
             cfg.workload_template = v;
+        } else if (std::strcmp(arg, "--workload-realtime") == 0) {
+            cfg.workload_realtime = true;
+        } else if (std::strcmp(arg, "--phase-ms") == 0) {
+            const char* v = need_value(arg);
+            if (!v || !parse_int_arg(v, cfg.phase_ms)) return false;
+        } else if (std::strcmp(arg, "--target-ops-per-sec") == 0) {
+            const char* v = need_value(arg);
+            if (!v || !parse_int_arg(v, cfg.target_ops_per_sec)) return false;
+        } else if (std::strcmp(arg, "--phase-repeat") == 0) {
+            const char* v = need_value(arg);
+            if (!v || !parse_int_arg(v, cfg.phase_repeat)) return false;
         } else if (std::strcmp(arg, "--telemetry-port") == 0) {
             const char* v = need_value(arg);
             if (!v || !parse_int_arg(v, cfg.telemetry_port)) return false;
