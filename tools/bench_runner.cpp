@@ -52,6 +52,7 @@ struct BenchConfig {
     unsigned seed = 12345;
     std::string workload_template = "adaptive_mix";
     int telemetry_port = 0;
+    int telemetry_hold_ms = 300000;
 };
 
 struct RepeatSummary {
@@ -1016,6 +1017,8 @@ static void print_usage(const char* argv0) {
         "                        large_burst, rss_peak_release, fragmentation_drift,\n"
         "                        latency_loop\n"
         "  --telemetry-port N    serve lightweight local workload UI on 127.0.0.1:N\n"
+        "  --telemetry-hold-ms N keep telemetry UI alive after benchmarks finish\n"
+        "                        when --telemetry-port is enabled (default: 300000; 0 exits immediately)\n"
         "  --seed N              deterministic RNG seed\n"
         "  --help                show this help\n",
         argv0);
@@ -1025,6 +1028,14 @@ static bool parse_int_arg(const char* value, int& out) {
     char* end = nullptr;
     long v = std::strtol(value, &end, 10);
     if (!end || *end != '\0' || v <= 0) return false;
+    out = static_cast<int>(v);
+    return true;
+}
+
+static bool parse_nonnegative_int_arg(const char* value, int& out) {
+    char* end = nullptr;
+    long v = std::strtol(value, &end, 10);
+    if (!end || *end != '\0' || v < 0) return false;
     out = static_cast<int>(v);
     return true;
 }
@@ -1097,6 +1108,9 @@ static bool parse_args(int argc, char** argv, BenchConfig& cfg) {
         } else if (std::strcmp(arg, "--telemetry-port") == 0) {
             const char* v = need_value(arg);
             if (!v || !parse_int_arg(v, cfg.telemetry_port)) return false;
+        } else if (std::strcmp(arg, "--telemetry-hold-ms") == 0) {
+            const char* v = need_value(arg);
+            if (!v || !parse_nonnegative_int_arg(v, cfg.telemetry_hold_ms)) return false;
         } else if (std::strcmp(arg, "--repeats") == 0) {
             const char* v = need_value(arg);
             if (!v || !parse_int_arg(v, cfg.repeats)) return false;
@@ -1307,6 +1321,18 @@ int main(int argc, char** argv) {
             double ops = ops_values.empty() ? 0.0 : ops_values.front();
             std::printf("  %-16s %10.0f ops/sec  %7.2f ms  peak=%zuKB\n",
                         last.name.c_str(), ops, last.ms, last.peak_rss_kb);
+        }
+    }
+
+    if (cfg.telemetry_port > 0 && cfg.telemetry_hold_ms > 0 && !cfg.json) {
+        std::printf("telemetry UI remains available for %.1f seconds; press Ctrl+C to stop earlier\n",
+                    static_cast<double>(cfg.telemetry_hold_ms) / 1000.0);
+        std::fflush(stdout);
+        int remaining = cfg.telemetry_hold_ms;
+        while (remaining > 0) {
+            int chunk = std::min(remaining, 1000);
+            usleep(static_cast<useconds_t>(chunk) * 1000);
+            remaining -= chunk;
         }
     }
 

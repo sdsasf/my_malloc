@@ -22,6 +22,17 @@ The UI also works for non-adaptive strategies:
   --workload-template adaptive_mix --telemetry-port 8080
 ```
 
+When `--telemetry-port` is enabled and output is not JSON, `bench_runner` keeps
+the local UI server alive for five minutes after the workload finishes. This
+prevents the browser from showing "connection refused" immediately after a short
+workload completes. Use `--telemetry-hold-ms 0` to return to one-shot benchmark
+behavior, or pass a larger value for longer inspection:
+
+```bash
+./build/bench_runner --strategy adaptive --bench generated_workload \
+  --workload-template adaptive_mix --telemetry-port 8080 --telemetry-hold-ms 600000
+```
+
 For non-adaptive strategies, the page shows workload phase, ops/sec, live-set
 estimates, requested bytes, remote-free count, and peak RSS. For adaptive runs,
 it also shows current mode, previous mode, mode switches, mapped/live ratio,

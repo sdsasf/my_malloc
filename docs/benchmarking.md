@@ -119,6 +119,7 @@ Examples:
 | `--threads N` | Number of worker threads |
 | `--workload-template NAME` | Template for `generated_workload`: `adaptive_mix`, `throughput_churn`, `remote_queue`, `large_burst`, `rss_peak_release`, `fragmentation_drift`, or `latency_loop` |
 | `--telemetry-port N` | Optional local web UI and `/snapshot` endpoint on `127.0.0.1:N` |
+| `--telemetry-hold-ms N` | Keep the local telemetry UI alive after a non-JSON run finishes; default is 300000 ms when a telemetry port is enabled |
 | `--repeats N` | Repeat each benchmark and output aggregate statistics |
 | `--seed N` | Deterministic random seed |
 | `--json` | Emit JSON lines |
