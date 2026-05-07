@@ -297,18 +297,45 @@ private:
     }
 
     void handle_client(int client) {
-        char req[512]{};
-        ssize_t n = recv(client, req, sizeof(req) - 1, 0);
-        if (n <= 0) return;
-        bool snapshot = std::strncmp(req, "GET /snapshot", 13) == 0;
+        std::string req;
+        char buf[1024];
+        while (req.find("\r\n\r\n") == std::string::npos && req.size() < 8192) {
+            fd_set readfds;
+            FD_ZERO(&readfds);
+            FD_SET(client, &readfds);
+            timeval tv{0, 200000};
+            int ready = select(client + 1, &readfds, nullptr, nullptr, &tv);
+            if (ready <= 0) break;
+            ssize_t n = recv(client, buf, sizeof(buf), 0);
+            if (n <= 0) break;
+            req.append(buf, static_cast<size_t>(n));
+        }
+        if (req.empty()) return;
+        bool snapshot = req.compare(0, 13, "GET /snapshot") == 0;
+        bool favicon = req.compare(0, 16, "GET /favicon.ico") == 0;
+        if (favicon) {
+            const char* response =
+                "HTTP/1.1 204 No Content\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+            send_all(client, response, std::strlen(response));
+            return;
+        }
         std::string body = snapshot ? telemetry_snapshot_json() : std::string(telemetry_html());
         const char* type = snapshot ? "application/json" : "text/html; charset=utf-8";
         char header[256];
         std::snprintf(header, sizeof(header),
                       "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nCache-Control: no-store\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
                       type, body.size());
-        send(client, header, std::strlen(header), 0);
-        send(client, body.data(), body.size(), 0);
+        send_all(client, header, std::strlen(header));
+        send_all(client, body.data(), body.size());
+    }
+
+    static void send_all(int fd, const char* data, size_t size) {
+        size_t sent = 0;
+        while (sent < size) {
+            ssize_t n = send(fd, data + sent, size - sent, MSG_NOSIGNAL);
+            if (n <= 0) return;
+            sent += static_cast<size_t>(n);
+        }
     }
 
     int fd_ = -1;
