@@ -46,10 +46,12 @@ it also shows current mode, previous mode, mode switches, mapped/live ratio,
 remote-free ratio, large-object ratio, fragmentation estimate, slow-path ratio,
 and safety counters.
 
-The page is a warm-toned realtime dashboard with a phase progress track, core
+The page uses a SpaceX-style black/white telemetry dashboard treatment: high
+contrast text, thin borders, compact status pills, a phase progress track, core
 metric cards, grouped workload/adaptive tables, and a lightweight canvas chart
-for ops/sec, live memory, and mapped memory. It is still a single embedded page
-served by `bench_runner`; no frontend assets or dependencies are loaded.
+for normalized ops/sec, live memory, and mapped memory trends. It is still a
+single embedded page served by `bench_runner`; no frontend assets or
+dependencies are loaded.
 
 ## Isolation Rules
 

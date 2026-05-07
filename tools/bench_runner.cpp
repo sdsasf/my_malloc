@@ -218,25 +218,25 @@ static const char* telemetry_html() {
 <meta charset="utf-8">
 <title>adaptive workload viewer</title>
 <style>
-:root{color-scheme:dark;--bg:#1c1510;--panel:#2a2119;--panel2:#34281e;--line:#5d4633;--text:#fff3e2;--muted:#c7a989;--hot:#f2a65a;--gold:#f6c85f;--ember:#df6f44;--green:#83c26b;--red:#d85c4a}
-*{box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:var(--bg);color:var(--text)}
-header{padding:18px 22px;background:#241a13;border-bottom:1px solid var(--line)}
-h1{font-size:20px;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:4px}
-.wrap{padding:16px;max-width:1280px;margin:0 auto}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;box-shadow:0 10px 24px rgba(0,0,0,.18)}
-.hero{grid-column:span 4;background:var(--panel2);display:grid;grid-template-columns:1.2fr 1fr;gap:16px;align-items:center}
-.label{color:var(--muted);font-size:12px}.value{font-size:24px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.big{font-size:34px}.pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:5px 10px;color:#ffe0b3;background:#3a2a1d;font-size:12px;margin-right:6px}
-.phase-track{height:16px;background:#463323;border:1px solid var(--line);border-radius:999px;overflow:hidden;margin-top:12px}.phase-fill{height:100%;width:0;background:var(--gold)}
-.phase-row{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;margin-top:12px}.phase-cell{height:10px;border-radius:999px;background:#4b3728}.phase-cell.active{background:var(--hot)}
-canvas{width:100%;height:260px;background:#18100b;border:1px solid var(--line);border-radius:8px}
-.wide{grid-column:span 4}.span2{grid-column:span 2}.legend{display:flex;gap:12px;color:var(--muted);font-size:12px;margin-top:10px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
-table{width:100%;border-collapse:collapse}td{padding:7px 0;border-bottom:1px solid #463323}td:first-child{color:var(--muted)}td:last-child{text-align:right;color:#ffe0b3}
+:root{color-scheme:dark;--bg:#050505;--panel:#0b0c0e;--panel2:#101113;--line:#2b2f35;--line2:#59616b;--text:#f7f7f3;--muted:#a4abb3;--amber:#f0b35b;--gold:#f5d07a;--blue:#a9d8ff;--green:#d7f2dc;--red:#ff7d70}
+*{box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#050505;color:var(--text)}
+header{padding:18px 24px;background:#050505;border-bottom:1px solid var(--line);letter-spacing:.04em}
+h1{font-size:18px;margin:0;font-weight:650}.sub{color:var(--muted);font-size:12px;margin-top:5px;text-transform:uppercase}
+.wrap{padding:16px;max-width:1320px;margin:0 auto}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.card{background:#0b0c0e;border:1px solid var(--line);border-radius:4px;padding:14px;box-shadow:0 18px 38px rgba(0,0,0,.28)}
+.hero{grid-column:span 4;display:grid;grid-template-columns:1.25fr 1fr;gap:18px;align-items:center}
+.label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.value{font-size:24px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.big{font-size:36px}.pill{display:inline-block;border:1px solid var(--line2);border-radius:2px;padding:5px 10px;color:#f7f7f3;background:#070707;font-size:12px;margin-right:6px;text-transform:uppercase}
+.phase-track{height:14px;background:#060606;border:1px solid var(--line2);border-radius:2px;overflow:hidden;margin-top:12px}.phase-fill{height:100%;width:0;background:#f7f7f3;box-shadow:0 0 18px rgba(255,255,255,.24)}
+.phase-row{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;margin-top:12px}.phase-cell{height:8px;border-radius:2px;background:#15171a;border:1px solid #2b2f35}.phase-cell.active{background:#f7f7f3;border-color:#f7f7f3}
+canvas{width:100%;height:300px;background:#030303;border:1px solid var(--line);border-radius:4px}
+.wide{grid-column:span 4}.span2{grid-column:span 2}.legend{display:flex;gap:16px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:10px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}.hint{margin-left:auto;color:#657789}
+table{width:100%;border-collapse:collapse}td{padding:7px 0;border-bottom:1px solid #172332}td:first-child{color:var(--muted);text-transform:uppercase;font-size:11px;letter-spacing:.05em}td:last-child{text-align:right;color:#e8f3ff;font-variant-numeric:tabular-nums}
 @media(max-width:800px){.grid{grid-template-columns:1fr}.hero,.wide,.span2{grid-column:span 1}.hero{grid-template-columns:1fr}.value{font-size:20px}.big{font-size:28px}}
 </style>
 </head>
 <body>
-<header><h1>Generated Workload Telemetry</h1><div class="sub">Realtime allocator workload and adaptive mode view</div></header>
+<header><h1>Adaptive Workload Telemetry</h1><div class="sub">Realtime generated load, mode selection, and memory substrate signals</div></header>
 <div class="wrap"><div class="grid">
 <div class="card hero">
   <div>
@@ -253,25 +253,28 @@ table{width:100%;border-collapse:collapse}td{padding:7px 0;border-bottom:1px sol
 </div>
 <div class="card"><div class="label">ops/sec</div><div id="ops" class="value">0</div></div>
 <div class="card"><div class="label">live bytes</div><div id="live" class="value">0</div></div>
-<div class="card"><div class="label">mode switches</div><div id="switches" class="value">0</div></div>
+<div class="card"><div class="label">current / previous mode</div><div id="modes" class="value">-</div></div>
 <div class="card"><div class="label">peak RSS KB</div><div id="rss" class="value">0</div></div>
-<div class="card wide"><canvas id="chart" width="1180" height="260"></canvas><div class="legend"><span><i class="dot" style="background:#f2a65a"></i>ops/sec</span><span><i class="dot" style="background:#83c26b"></i>live KB</span><span><i class="dot" style="background:#df6f44"></i>mapped KB</span></div></div>
+<div class="card wide"><canvas id="chart" width="1180" height="300"></canvas><div class="legend"><span><i class="dot" style="background:#f7f7f3"></i>throughput trend</span><span><i class="dot" style="background:#a4abb3"></i>live memory trend</span><span><i class="dot" style="background:#f0b35b"></i>mapped memory trend</span><span class="hint">normalized with headroom so shape is visible</span></div></div>
 <div class="card span2"><table id="workloadMetrics"></table></div>
 <div class="card span2"><table id="adaptiveMetrics"></table></div>
 </div>
 </div>
 <script>
 const hist=[]; const maxN=240;
-function fmt(n){if(typeof n==='boolean')return n?'yes':'no';return Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2});}
+function fmt(n){if(n===undefined||n===null)return 'n/a';if(typeof n==='boolean')return n?'yes':'no';if(typeof n==='string')return n;if(!Number.isFinite(Number(n)))return String(n);return Number(n).toLocaleString(undefined,{maximumFractionDigits:2});}
 function draw(){
  const c=document.getElementById('chart'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);
- ctx.fillStyle='#18100b';ctx.fillRect(0,0,c.width,c.height);
- ctx.strokeStyle='#3b2a1d';ctx.lineWidth=1;
- for(let i=1;i<5;i++){const y=i*c.height/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(c.width,y);ctx.stroke();}
- const max=Math.max(1,...hist.map(x=>Math.max(x.ops,x.live/1024,x.mapped/1024)));
- function line(key,color){ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=3;hist.forEach((p,i)=>{const x=i*(c.width/Math.max(1,maxN-1));const y=c.height-(p[key]/max)*c.height;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);});ctx.stroke();}
- line('mapped','#df6f44');line('live','#83c26b');line('ops','#f2a65a');
- const last=hist[hist.length-1]; if(last){ctx.fillStyle='#c7a989';ctx.font='13px system-ui';ctx.fillText('max scale '+fmt(max),12,22);}
+ ctx.fillStyle='#030303';ctx.fillRect(0,0,c.width,c.height);
+ const top=30,bottom=26,left=48,right=16,h=c.height-top-bottom,w=c.width-left-right;
+ ctx.strokeStyle='#1d2024';ctx.lineWidth=1;
+ for(let i=0;i<=4;i++){const y=top+i*h/4;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(left+w,y);ctx.stroke();}
+ for(let i=0;i<=6;i++){const x=left+i*w/6;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,top+h);ctx.stroke();}
+ ctx.fillStyle='#a4abb3';ctx.font='12px system-ui';ctx.fillText('NORMALIZED TELEMETRY TRENDS',left,18);
+ function range(key){const vals=hist.map(p=>p[key]||0);let mn=Math.min(...vals),mx=Math.max(...vals);if(!Number.isFinite(mn)||!Number.isFinite(mx)||mx<=mn){mn=0;mx=Math.max(1,mx||1);}return [mn,mx];}
+ function line(key,color){const [mn,mx]=range(key);ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=2.5;hist.forEach((p,i)=>{const x=left+i*(w/Math.max(1,maxN-1));const v=((p[key]||0)-mn)/(mx-mn);const y=top+h-(0.08+v*0.84)*h;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);});ctx.stroke();}
+ line('mapped','#f0b35b');line('live','#a4abb3');line('ops','#f7f7f3');
+ const last=hist[hist.length-1]; if(last){ctx.fillStyle='#a4abb3';ctx.fillText('latest ops '+fmt(last.ops)+' | live '+fmt(last.live)+' KB | mapped '+fmt(last.mapped)+' KB',left,c.height-8);}
 }
 function phaseCells(index,count){
  let html=''; const n=Math.max(1,Math.min(24,count||1));
@@ -280,7 +283,7 @@ function phaseCells(index,count){
 }
 function rows(items){return items.map(x=>'<tr><td>'+x[0]+'</td><td>'+fmt(x[1])+'</td></tr>').join('');}
 function setRunPill(running){
- const el=document.getElementById('running');el.textContent=running?'running':'finished';el.style.background=running?'#5a341f':'#34301f';el.style.color=running?'#ffd19a':'#d7cdb1';
+ const el=document.getElementById('running');el.textContent=running?'running':'finished';el.style.background=running?'#f7f7f3':'#070707';el.style.color=running?'#050505':'#a4abb3';
 }
 async function poll(){
  try{
@@ -294,11 +297,11 @@ async function poll(){
   phaseCells(w.phase_index,w.phase_count);
   document.getElementById('ops').textContent=fmt(w.ops_per_sec);
   document.getElementById('live').textContent=fmt(w.live_bytes);
-  document.getElementById('switches').textContent=fmt(a.mode_switches);
+  document.getElementById('modes').textContent=(a.current_mode||'n/a')+' / '+(a.previous_mode||'n/a');
   document.getElementById('rss').textContent=fmt(w.peak_rss_kb);
-  hist.push({ops:w.ops_per_sec||0,live:w.live_bytes||0,mapped:a.mapped_bytes||0}); if(hist.length>maxN)hist.shift(); draw();
+  hist.push({ops:w.ops_per_sec||0,live:(w.live_bytes||0)/1024,mapped:(a.mapped_bytes||0)/1024}); if(hist.length>maxN)hist.shift(); draw();
   document.getElementById('workloadMetrics').innerHTML=rows([['phase elapsed ms',w.phase_elapsed_ms],['phase duration ms',w.phase_duration_ms],['alloc/free/realloc',w.allocs+' / '+w.frees+' / '+w.reallocs],['remote frees',w.remote_frees],['requested bytes',w.requested_bytes],['peak live bytes',w.peak_live_bytes]]);
-  document.getElementById('adaptiveMetrics').innerHTML=rows([['previous mode',a.previous_mode||'n/a'],['mapped/live',a.mapped_live_ratio],['remote ratio',a.remote_free_ratio],['large ratio',a.large_bytes_ratio],['fragmentation',a.fragmentation_estimate],['slow path',a.slow_path_ratio],['safety errors',(a.invalid_free_count||0)+' / '+(a.double_free_count||0)]]);
+  document.getElementById('adaptiveMetrics').innerHTML=rows([['mode switches',a.mode_switches],['mapped/live',a.mapped_live_ratio],['remote ratio',a.remote_free_ratio],['large ratio',a.large_bytes_ratio],['fragmentation',a.fragmentation_estimate],['slow path',a.slow_path_ratio],['safety errors',(a.invalid_free_count||0)+' / '+(a.double_free_count||0)]]);
  }catch(e){}
 }
 setInterval(poll,250); poll();
