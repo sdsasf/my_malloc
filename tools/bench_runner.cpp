@@ -175,7 +175,11 @@ static void append_selector_event_json(std::ostringstream& os,
        << "\",\"candidate_mode\":\"" << my_ptmalloc::adaptive_mode_name(e.candidate_mode)
        << "\",\"switched\":" << (e.switched ? "true" : "false")
        << ",\"reason\":\"" << e.reason
-       << "\",\"large_bytes_ratio\":" << f.large_bytes_ratio
+       << "\",\"selector_backend\":\"" << e.selector_backend
+       << "\",\"rule_candidate\":\"" << my_ptmalloc::adaptive_mode_name(e.rule_candidate)
+       << "\",\"model_candidate\":\"" << my_ptmalloc::adaptive_mode_name(e.model_candidate)
+       << "\",\"model_confidence\":" << e.model_confidence
+       << ",\"large_bytes_ratio\":" << f.large_bytes_ratio
        << ",\"remote_free_ratio\":" << f.remote_free_ratio
        << ",\"mapped_live_ratio\":" << f.mapped_live_ratio
        << ",\"size_entropy\":" << f.size_entropy

@@ -14,6 +14,10 @@ struct AdaptiveSelectorEvent {
     AdaptiveModeId candidate_mode;
     bool switched;
     char reason[32];
+    char selector_backend[16];
+    AdaptiveModeId rule_candidate;
+    AdaptiveModeId model_candidate;
+    double model_confidence;
     WorkloadFeatures features;
 };
 

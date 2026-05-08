@@ -107,6 +107,7 @@ add_test(NAME adaptive_selector_remote_free
          COMMAND ${CMAKE_COMMAND} -E env
          MY_MALLOC_MODE=adaptive
          MY_MALLOC_ADAPTIVE_MODE=auto
+         MY_MALLOC_ADAPTIVE_MODE_SELECTOR=rule
          MY_MALLOC_ADAPTIVE_MODE_WINDOW=64
          MY_MALLOC_ADAPTIVE_MODE_COOLDOWN=0
          $<TARGET_FILE:test_adaptive_modes> remote_selector)
@@ -114,6 +115,7 @@ add_test(NAME adaptive_selector_large_object
          COMMAND ${CMAKE_COMMAND} -E env
          MY_MALLOC_MODE=adaptive
          MY_MALLOC_ADAPTIVE_MODE=auto
+         MY_MALLOC_ADAPTIVE_MODE_SELECTOR=rule
          MY_MALLOC_ADAPTIVE_MODE_WINDOW=32
          MY_MALLOC_ADAPTIVE_MODE_COOLDOWN=0
          $<TARGET_FILE:test_adaptive_modes> large_selector)
@@ -172,6 +174,16 @@ add_test(NAME generated_workload_config_validation
                  --workload-config ${CMAKE_SOURCE_DIR}/workloads/smoke_large_to_small.json
                  --workload-realtime
                  --payload-validation --payload-validation-rate 8
+                 --slots 128 --threads 2 --json)
+add_test(NAME generated_workload_adaptive_model_selector
+         COMMAND ${CMAKE_COMMAND} -E env
+         MY_MALLOC_ADAPTIVE_MODE=auto
+         MY_MALLOC_ADAPTIVE_MODE_SELECTOR=model
+         MY_MALLOC_ADAPTIVE_MODE_WINDOW=32
+         MY_MALLOC_ADAPTIVE_MODE_COOLDOWN=0
+         $<TARGET_FILE:bench_runner> --strategy adaptive --bench generated_workload
+                 --workload-config ${CMAKE_SOURCE_DIR}/workloads/smoke_large_to_small.json
+                 --workload-realtime --phase-ms 50 --phase-repeat 1
                  --slots 128 --threads 2 --json)
 
 # Example plugin strategy for users to copy.

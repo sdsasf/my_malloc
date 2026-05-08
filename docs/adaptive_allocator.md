@@ -66,6 +66,9 @@ Files:
 - `src/adaptive_telemetry.cpp`
 - `include/my_ptmalloc/adaptive_selector.h`
 - `src/adaptive_selector.cpp`
+- `include/my_ptmalloc/adaptive_model_selector.h`
+- `src/adaptive_model_selector.cpp`
+- generated model: `include/my_ptmalloc/generated_selector_model.h`
 - `include/my_ptmalloc/adaptive_runtime.h`
 - `src/adaptive_runtime.cpp`
 
@@ -98,10 +101,11 @@ The selector extracts these as delta-window features. Hot-path telemetry keeps c
 
 At each selector window boundary, `src/adaptive_selector.cpp` records an
 `AdaptiveSelectorEvent` into a fixed-size ring buffer. Each event stores the
-previous/current/candidate mode, whether a soft switch happened, the decision
-reason, and the window feature values used for the decision. Tooling such as
-`bench_runner` reads this ring buffer for explanation; it does not call
-`adaptive_extract_window_features()` from the Web snapshot path.
+previous/current/candidate mode, selector backend, rule candidate, model
+candidate, model confidence, whether a guard was applied, whether a soft switch
+happened, the decision reason, and the window feature values used for the
+decision. Tooling such as `bench_runner` reads this ring buffer for explanation;
+it does not call `adaptive_extract_window_features()` from the Web snapshot path.
 
 ## Selector Rules
 
@@ -115,6 +119,49 @@ reason, and the window feature values used for the decision. Tooling such as
 6. high size entropy plus fragmentation -> `FragmentationStable`;
 7. high cache hit/reuse rate with low RSS pressure -> `ThroughputCache`;
 8. otherwise -> `Balanced`.
+
+## Offline-Trained Model Selector
+
+`MY_MALLOC_ADAPTIVE_MODE_SELECTOR=model` enables a lightweight cost model:
+
+```text
+WorkloadFeatures window
+  -> evaluate generated cost model for all 8 AdaptiveMode candidates
+  -> apply cooldown and hysteresis
+  -> soft-switch only if expected gain is high enough
+```
+
+The model is trained offline by:
+
+```bash
+python3 tools/evaluate_selector_model.py \
+  --json-out models/selector_evaluation_results.json \
+  --markdown-out docs/adaptive_selector_model_results.md
+
+python3 tools/train_selector_model.py \
+  --dataset models/selector_evaluation_results.json \
+  --model-out include/my_ptmalloc/generated_selector_model.h \
+  --summary-out models/selector_training_summary.json
+```
+
+The training script does not contain a hand-written mode oracle. It reads real
+benchmark measurements from `evaluate_selector_model.py`, learns objective
+weights from pairwise fixed-mode outcomes, derives per-mode cost labels from
+those learned weights, and emits a compact boosted-stump ensemble plus per-mode
+cost biases into `generated_selector_model.h`. The generated header also stores
+the learned `SWITCH_COST`. Runtime inference is just a few comparisons and
+additions at selector window boundaries, not on every allocation. The training
+summary records model id, feature names, mode names, objective weights,
+switch-cost, learned-cost accuracy, mean regret, and per-mode pick counts.
+
+See [adaptive_selector_model.md](adaptive_selector_model.md) for the model
+architecture diagrams, training pipeline, generated header format, runtime
+selector flow, Web telemetry fields, and future trace-training plan.
+
+`MY_MALLOC_ADAPTIVE_MODE=auto` defaults to the measured model selector. The
+model path does not call the legacy rule selector and does not use rule fallback.
+`MY_MALLOC_ADAPTIVE_MODE_SELECTOR=rule` remains available only as an explicit
+debug/baseline mode for comparing against the older rule implementation.
 
 Runtime guards:
 
@@ -140,7 +187,7 @@ Runtime guards:
 | Env var | Values |
 |---|---|
 | `MY_MALLOC_ADAPTIVE_MODE` | `balanced`, `throughput_cache`, `deterministic_latency`, `compact_rss`, `fragmentation_stable`, `cross_thread`, `large_object`, `hardened_debug`, `auto` |
-| `MY_MALLOC_ADAPTIVE_MODE_SELECTOR` | `rule`, `fixed`, `manual` |
+| `MY_MALLOC_ADAPTIVE_MODE_SELECTOR` | `model`, `rule` baseline, `fixed`, `manual` |
 | `MY_MALLOC_ADAPTIVE_MODE_WINDOW` | selector observation window |
 | `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` | cooldown in windows |
 | `MY_MALLOC_ADAPTIVE_DEBUG_MODE` | `0` / `1` |
@@ -160,6 +207,9 @@ Runtime guards:
 - `remote_free_ratio`, `size_entropy`, `large_bytes_ratio`;
 - `mapped_live_ratio`, `fragmentation_estimate`, `slow_path_ratio`;
 - `double_free_count`, `invalid_free_count`.
+- `selector_last_window.selector_backend`, `model_candidate`,
+  `model_confidence`, and legacy `rule_candidate` when the explicit rule
+  baseline is enabled.
 
 ## Current Limitations
 
@@ -176,7 +226,8 @@ Implemented:
 - hardened debug header cookie and tail redzone validation;
 - per-mode and per-storage stats;
 - remote-free telemetry;
-- rule selector with window/cooldown/hysteresis;
+- legacy rule selector for baseline comparison;
+- offline-trained compact model selector as the default auto selector;
 - delta-window feature extraction for selector decisions;
 - compact RSS purge/unmap behavior;
 - large-object direct-map isolation;
@@ -190,6 +241,8 @@ Future work:
 - sampled p95/p99 latency;
 - front redzone/page-guard debug variants;
 - configurable multi-window smoothing for noisy workloads.
+- collecting more measured trace labels from external applications, not only
+  generated workloads.
 
 ## Commands
 

@@ -136,8 +136,8 @@ Adaptive-specific runtime parameters can be set through the environment when `--
 | Env var | Meaning |
 |---|---|
 | `MY_MALLOC_ADAPTIVE_MODE` | `balanced`, `throughput_cache`, `deterministic_latency`, `compact_rss`, `fragmentation_stable`, `cross_thread`, `large_object`, `hardened_debug`, or `auto`. |
-| `MY_MALLOC_ADAPTIVE_MODE_SELECTOR` | `rule`, `fixed`, or `manual`. |
-| `MY_MALLOC_ADAPTIVE_MODE_WINDOW` | Rule-selector observation window. |
+| `MY_MALLOC_ADAPTIVE_MODE_SELECTOR` | `model` by default; `rule` is a legacy/debug baseline; `fixed` and `manual` are test controls. |
+| `MY_MALLOC_ADAPTIVE_MODE_WINDOW` | Selector observation window. |
 | `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` | Cooldown in windows after a mode switch. |
 | `MY_MALLOC_ADAPTIVE_DEBUG_MODE` | Force `hardened_debug` when set to `1`. |
 | `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` | Initial small-object page size. |
@@ -155,6 +155,11 @@ MY_MALLOC_ADAPTIVE_MODE=compact_rss \
 
 MY_MALLOC_ADAPTIVE_MODE=auto MY_MALLOC_ADAPTIVE_MODE_WINDOW=64 \
   ./build/bench_runner --strategy adaptive --bench producer_consumer --json
+
+MY_MALLOC_ADAPTIVE_MODE=auto MY_MALLOC_ADAPTIVE_MODE_SELECTOR=model \
+  MY_MALLOC_ADAPTIVE_MODE_WINDOW=64 \
+  ./build/bench_runner --strategy adaptive --bench generated_workload \
+  --workload-template adaptive_mix --json
 
 ./build/bench_runner --strategy adaptive --bench generated_workload \
   --workload-template adaptive_mix --json
@@ -174,6 +179,23 @@ JSON example:
 ```
 
 Adaptive JSON is centered on the two-layer architecture: mode fields describe the policy layer, storage/cache/release fields describe the shared memory layer, and feature ratios describe selector inputs. Important adaptive fields are `current_mode`, `mode_switches`, per-mode alloc/free/live/mapped arrays, `storage_allocs`, `storage_frees`, `pool_hits`, `pool_misses`, `release_unmapped_bytes`, `mapped_live_ratio`, `remote_free_ratio`, `size_entropy`, `large_bytes_ratio`, `fragmentation_estimate`, and `slow_path_ratio`.
+
+When the generated workload telemetry server is enabled, `/snapshot` also
+includes selector event fields such as `selector_backend`, `model_candidate`,
+`model_confidence`, and legacy `rule_candidate` for explicit rule-baseline
+runs. The Web UI renders
+these from the selector ring buffer instead of re-extracting workload features.
+The offline model can be regenerated with:
+
+```bash
+python3 tools/train_selector_model.py \
+  --model-out include/my_ptmalloc/generated_selector_model.h \
+  --summary-out models/selector_training_summary.json
+```
+
+The generated model is intentionally compact: online inference evaluates all
+eight modes only at selector window boundaries and keeps the allocator hot path
+unchanged.
 
 When `--repeats N` is greater than 1, JSON output reports aggregate `mean`, `median`, `p95`, `stddev`, `min`, and `max` operation rates instead of relying on a single sample.
 

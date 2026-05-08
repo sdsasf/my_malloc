@@ -135,14 +135,14 @@ MY_MALLOC_MODE=adaptive LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_MODE=throughput_cache LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_MODE=compact_rss LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_MODE=large_object LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
-MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_MODE=auto MY_MALLOC_ADAPTIVE_MODE_SELECTOR=rule LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
+MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_MODE=auto MY_MALLOC_ADAPTIVE_MODE_SELECTOR=model LD_PRELOAD=./build/libmy_ptmalloc.so ./your_program
 ```
 
 `MY_MALLOC_MODE=adaptive` is a standalone adaptive allocator backend. It is not a dispatcher over `ptmalloc`, `jemalloc_like`, `tcmalloc_like`, or `mimalloc_like`. Its architecture is:
 
 1. **Shared Memory Management Layer**: `AdaptiveHeader`, ownership table, registry, size-class pages, spans, direct mappings/extents, central free lists, reclaim, and raw telemetry events.
 2. **Adaptive Mode Policy Layer**: each mode returns an `AllocationPlan` and `ReleaseDecision`; modes do not directly manipulate page/span/mmap internals.
-3. **Runtime Telemetry and Selector**: extracts workload features, applies rule selection with window/cooldown/hysteresis, and soft-switches the active mode.
+3. **Runtime Telemetry and Selector**: extracts workload features, applies the offline-trained model selector with window/cooldown/hysteresis, and soft-switches the active mode.
 
 Soft switching only affects future allocations. `free`, `realloc`, and `usable_size` route through allocation-time `mode_id` in `AdaptiveHeader`.
 
@@ -151,13 +151,20 @@ Important adaptive knobs:
 | Env var | Meaning |
 |---|---|
 | `MY_MALLOC_ADAPTIVE_MODE` | `balanced`, `throughput_cache`, `deterministic_latency`, `compact_rss`, `fragmentation_stable`, `cross_thread`, `large_object`, `hardened_debug`, or `auto`. |
-| `MY_MALLOC_ADAPTIVE_MODE_SELECTOR` | `rule`, `fixed`, or `manual`. |
-| `MY_MALLOC_ADAPTIVE_MODE_WINDOW` | Rule-selector observation window. |
+| `MY_MALLOC_ADAPTIVE_MODE_SELECTOR` | `model` by default; `rule` is a legacy/debug baseline; `fixed` and `manual` are test controls. |
+| `MY_MALLOC_ADAPTIVE_MODE_WINDOW` | Selector observation window. |
 | `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` | Cooldown in windows after a mode switch. |
 | `MY_MALLOC_ADAPTIVE_DEBUG_MODE` | Force `hardened_debug` when set to `1`. |
 | `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` | Initial small-object page size. |
 | `MY_MALLOC_ADAPTIVE_MEDIUM_SPAN_SIZE` | Initial medium-object span size. |
 | `MY_MALLOC_ADAPTIVE_EMPTY_CACHE_LIMIT` | Empty page/span cache limit before release. |
+
+The `model` selector uses `include/my_ptmalloc/generated_selector_model.h`,
+which is generated offline by `tools/train_selector_model.py`. Online inference
+only evaluates a compact cost model at selector window boundaries. `auto`
+adaptive mode defaults to this model path; it does not combine model decisions
+with the legacy rule selector. The design, diagrams, training pipeline, and
+validation notes are in [docs/adaptive_selector_model.md](docs/adaptive_selector_model.md).
 
 Enable optional observability:
 
@@ -247,6 +254,7 @@ Full benchmark instructions and current results:
 | [docs/jemalloc_design.md](docs/jemalloc_design.md) | jemalloc-like allocator: arenas, runs, tcache |
 | [docs/mimalloc_design.md](docs/mimalloc_design.md) | mimalloc-like allocator: per-thread heaps, page ownership, remote-free queues |
 | [docs/adaptive_allocator.md](docs/adaptive_allocator.md) | Two-layer adaptive backend: shared memory services, mode policy, telemetry selector, soft switching |
+| [docs/adaptive_selector_model.md](docs/adaptive_selector_model.md) | Offline-trained lightweight selector model and runtime configuration |
 | [docs/adaptive_workload_generator.md](docs/adaptive_workload_generator.md) | Generated multi-phase workloads for comparing adaptive and fixed allocators |
 | [docs/adaptive_visualization.md](docs/adaptive_visualization.md) | Optional local web UI for generated workload and adaptive mode telemetry |
 | [docs/allocator_lab.md](docs/allocator_lab.md) | Custom allocator strategy/plugin API and validation workflow |

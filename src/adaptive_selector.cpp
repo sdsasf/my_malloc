@@ -2,6 +2,7 @@
 
 #include "my_ptmalloc/adaptive_selector.h"
 #include "my_ptmalloc/adaptive_mode.h"
+#include "my_ptmalloc/adaptive_model_selector.h"
 #include "my_ptmalloc/adaptive_runtime.h"
 #include "my_ptmalloc/adaptive_telemetry.h"
 
@@ -55,6 +56,10 @@ static void record_selector_event(AdaptiveModeId previous,
                                   AdaptiveModeId candidate,
                                   bool switched,
                                   const char* reason,
+                                  const char* backend,
+                                  AdaptiveModeId rule_candidate,
+                                  AdaptiveModeId model_candidate,
+                                  double model_confidence,
                                   const WorkloadFeatures& features) noexcept {
     uint64_t seq = g_selector_event_seq.fetch_add(1, std::memory_order_relaxed) + 1;
     AdaptiveSelectorEvent event{};
@@ -64,8 +69,27 @@ static void record_selector_event(AdaptiveModeId previous,
     event.candidate_mode = candidate;
     event.switched = switched;
     std::snprintf(event.reason, sizeof(event.reason), "%s", reason ? reason : "unknown");
+    std::snprintf(event.selector_backend, sizeof(event.selector_backend), "%s",
+                  backend ? backend : "rule");
+    event.rule_candidate = rule_candidate;
+    event.model_candidate = model_candidate;
+    event.model_confidence = model_confidence;
     event.features = features;
     g_selector_events[(seq - 1) % ADAPTIVE_SELECTOR_EVENT_RING_SIZE] = event;
+}
+
+static const char* selector_backend_name(AdaptiveModeSelectorKind kind) noexcept {
+    switch (kind) {
+        case AdaptiveModeSelectorKind::Model:
+            return "model";
+        case AdaptiveModeSelectorKind::Fixed:
+            return "fixed";
+        case AdaptiveModeSelectorKind::Manual:
+            return "manual";
+        case AdaptiveModeSelectorKind::Rule:
+        default:
+            return "rule";
+    }
 }
 
 } // namespace
@@ -112,28 +136,48 @@ void adaptive_selector_maybe_switch() noexcept {
 
     WorkloadFeatures f = adaptive_extract_window_features();
     AdaptiveModeId current = adaptive_current_mode();
-    AdaptiveModeId next = adaptive_select_mode(f);
+    AdaptiveModelDecision model_decision = adaptive_model_select_mode(f, current);
+    AdaptiveModeId model_candidate = model_decision.available ? model_decision.mode : current;
+    AdaptiveModeId rule_candidate = model_candidate;
+    AdaptiveModeId next = model_candidate;
+    if (cfg.selector == AdaptiveModeSelectorKind::Rule) {
+        rule_candidate = adaptive_select_mode(f);
+        next = rule_candidate;
+    }
     AdaptiveModeId previous = adaptive_previous_mode();
-    const char* reason = selector_reason_for_candidate(next, f);
+    const char* reason = cfg.selector == AdaptiveModeSelectorKind::Rule
+        ? selector_reason_for_candidate(next, f)
+        : "model_cost";
+    const char* backend = selector_backend_name(cfg.selector);
     if (n < adaptive_selector_cooldown_until()) {
-        record_selector_event(previous, current, next, false, "cooldown", f);
+        record_selector_event(previous, current, next, false, "cooldown", backend,
+                              rule_candidate, model_candidate, model_decision.confidence,
+                              f);
         return;
     }
     if (next == current) {
-        record_selector_event(previous, current, next, false, reason, f);
+        record_selector_event(previous, current, next, false, reason, backend,
+                              rule_candidate, model_candidate, model_decision.confidence,
+                              f);
         return;
     }
 
-    bool severe_memory_pressure = f.mapped_live_ratio > 12.0 && f.mapped_bytes > 8 * 1024 * 1024;
-    bool expected_gain = severe_memory_pressure ||
-        next == AdaptiveModeId::HardenedDebug ||
-        f.remote_free_ratio > 0.25 ||
-        f.large_bytes_ratio > 0.60 ||
-        f.slow_path_ratio > 0.45 ||
-        f.internal_frag_ratio > 0.30 ||
-        f.cache_hit_rate > 0.80;
+    bool expected_gain = false;
+    if (cfg.selector == AdaptiveModeSelectorKind::Rule) {
+        expected_gain =
+            next == AdaptiveModeId::HardenedDebug ||
+            f.remote_free_ratio > 0.25 ||
+            f.large_bytes_ratio > 0.60 ||
+            f.slow_path_ratio > 0.45 ||
+            f.internal_frag_ratio > 0.30 ||
+            f.cache_hit_rate > 0.80;
+    } else {
+        expected_gain = model_decision.available && model_decision.confidence > 0.015;
+    }
     if (!expected_gain) {
-        record_selector_event(previous, current, next, false, "hysteresis", f);
+        record_selector_event(previous, current, next, false, "hysteresis", backend,
+                              rule_candidate, model_candidate, model_decision.confidence,
+                              f);
         return;
     }
 
@@ -141,7 +185,9 @@ void adaptive_selector_maybe_switch() noexcept {
     adaptive_selector_set_cooldown_until(
         n + static_cast<uint64_t>(cfg.mode_cooldown) * static_cast<uint64_t>(cfg.mode_window));
     adaptive_mode_policy(next).on_window();
-    record_selector_event(previous, current, next, true, reason, f);
+    record_selector_event(previous, current, next, true, reason, backend,
+                          rule_candidate, model_candidate, model_decision.confidence,
+                          f);
 }
 
 bool adaptive_selector_last_event(AdaptiveSelectorEvent& out) noexcept {

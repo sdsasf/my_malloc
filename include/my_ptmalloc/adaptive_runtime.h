@@ -10,6 +10,7 @@ enum class AdaptiveModeSelectorKind : uint8_t {
     Rule = 0,
     Fixed = 1,
     Manual = 2,
+    Model = 3,
 };
 
 enum class AdaptiveModeState : uint8_t {

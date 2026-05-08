@@ -1,0 +1,92 @@
+{
+  "dataset": "models/selector_training_dataset.json",
+  "feature_names": [
+    "LargeBytesRatio",
+    "RemoteFreeRatio",
+    "MappedLiveRatio",
+    "SlowPathRatio",
+    "SizeEntropy",
+    "InternalFragRatio",
+    "CacheHitRate",
+    "SafetyErrorRate",
+    "LogAllocCalls",
+    "LogLiveBytes"
+  ],
+  "mode_names": [
+    "Balanced",
+    "ThroughputCache",
+    "DeterministicLatency",
+    "CompactRSS",
+    "FragmentationStable",
+    "CrossThreadMessage",
+    "LargeObjectStreaming",
+    "HardenedDebug"
+  ],
+  "model_id": "learned_cost_gbdt_v2_n784_t70",
+  "note": "The objective cost and selector model are trained from measured rows; no hand-written score weights or mode oracle are used for training.",
+  "test_metrics": {
+    "example_count": 196,
+    "mean_absolute_error": 0.09296766760721459,
+    "mean_regret": 0.05249583610160559,
+    "mode_pick_counts": {
+      "Balanced": 4,
+      "CompactRSS": 5,
+      "CrossThreadMessage": 0,
+      "DeterministicLatency": 0,
+      "FragmentationStable": 4,
+      "HardenedDebug": 0,
+      "LargeObjectStreaming": 15,
+      "ThroughputCache": 0
+    },
+    "top1_accuracy": 0.5714285714285714,
+    "workload_count": 28
+  },
+  "train_metrics": {
+    "example_count": 784,
+    "mean_absolute_error": 0.08133672118268342,
+    "mean_regret": 0.04301718206419884,
+    "mode_pick_counts": {
+      "Balanced": 16,
+      "CompactRSS": 22,
+      "CrossThreadMessage": 0,
+      "DeterministicLatency": 0,
+      "FragmentationStable": 16,
+      "HardenedDebug": 0,
+      "LargeObjectStreaming": 58,
+      "ThroughputCache": 0
+    },
+    "top1_accuracy": 0.5892857142857143,
+    "workload_count": 112
+  },
+  "training": {
+    "examples": 980,
+    "label_source": "learned objective cost from fixed-mode measured benchmark rows",
+    "learning_rate": 0.35,
+    "objective_model": {
+      "metrics": [
+        "ms",
+        "peak_rss_kb",
+        "mapped_live_ratio",
+        "fragmentation_estimate",
+        "slow_path_ratio",
+        "mode_switches",
+        "validation_errors"
+      ],
+      "pairwise_accuracy": 0.9216300940438872,
+      "switch_cost": 0.035331101258799555,
+      "weights": {
+        "fragmentation_estimate": 0.12347928232617354,
+        "mapped_live_ratio": 0.17836201221705836,
+        "mode_switches": 0.04906732792945842,
+        "ms": 0.0846873094982829,
+        "peak_rss_kb": 0.38561888513948417,
+        "slow_path_ratio": 0.1297178549600842,
+        "validation_errors": 0.04906732792945842
+      }
+    },
+    "rounds_per_mode": 10,
+    "test_examples": 196,
+    "train_examples": 784,
+    "tree_count": 70
+  }
+}

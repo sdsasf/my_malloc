@@ -181,9 +181,15 @@ function renderTimeline(events) {
     const from = e.current_mode || 'n/a';
     const to = e.candidate_mode || 'n/a';
     const title = e.switched ? `${from} -> ${to}` : `${from} held`;
+    const backend = e.selector_backend ? `${e.selector_backend} selector` : 'selector';
+    const model = e.model_candidate ? `model ${e.model_candidate} (${fmt(e.model_confidence)})` : '';
+    const baseline = e.selector_backend === 'rule' && e.rule_candidate
+      ? `rule ${e.rule_candidate}`
+      : '';
     return `<div class="event ${e.switched ? 'switched' : ''}">
       <div class="event-title">${title}</div>
-      <div class="event-reason">reason ${fmt(e.reason)}</div>
+      <div class="event-reason">${backend} | reason ${fmt(e.reason)}</div>
+      <div class="event-reason">${baseline ? baseline + ' | ' : ''}${model}</div>
       <div class="event-value">${importantValue(e)}</div>
     </div>`;
   }).join('');
@@ -195,7 +201,12 @@ function renderDecision(e) {
   const title = e.switched
     ? `${e.current_mode} -> ${e.candidate_mode}`
     : `${e.current_mode} retained`;
-  document.getElementById('decisionSummary').textContent = `${title} because ${e.reason}`;
+  const backend = e.selector_backend || 'rule';
+  const modelPart = e.model_candidate
+    ? ` | model ${e.model_candidate}, confidence ${fmt(e.model_confidence)}`
+    : '';
+  document.getElementById('decisionSummary').textContent =
+    `${title} because ${e.reason} (${backend})${modelPart}`;
   const features = [
     ['large bytes', featureValue(e, 'large_bytes_ratio'), 1],
     ['remote free', featureValue(e, 'remote_free_ratio'), 1],

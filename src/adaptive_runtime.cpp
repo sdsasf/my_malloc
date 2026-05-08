@@ -88,7 +88,11 @@ static AdaptiveModeId parse_mode(const char* env, bool* is_auto = nullptr) noexc
 static AdaptiveModeSelectorKind parse_selector(const char* env) noexcept {
     if (streq(env, "fixed")) return AdaptiveModeSelectorKind::Fixed;
     if (streq(env, "manual")) return AdaptiveModeSelectorKind::Manual;
-    return AdaptiveModeSelectorKind::Rule;
+    if (streq(env, "model")) return AdaptiveModeSelectorKind::Model;
+    // Historical alias: "hybrid" now means the measured-cost model selector.
+    if (streq(env, "hybrid")) return AdaptiveModeSelectorKind::Model;
+    if (streq(env, "rule")) return AdaptiveModeSelectorKind::Rule;
+    return AdaptiveModeSelectorKind::Model;
 }
 
 static void init_once() noexcept {
@@ -119,8 +123,10 @@ static void init_once() noexcept {
     }
     AdaptiveModeSelectorKind selector = parse_selector(std::getenv("MY_MALLOC_ADAPTIVE_MODE_SELECTOR"));
     if (mode_auto && selector == AdaptiveModeSelectorKind::Fixed) {
-        selector = AdaptiveModeSelectorKind::Rule;
-    } else if (!mode_auto && mode_env && selector == AdaptiveModeSelectorKind::Rule) {
+        selector = AdaptiveModeSelectorKind::Model;
+    } else if (!mode_auto && mode_env &&
+               (selector == AdaptiveModeSelectorKind::Rule ||
+                selector == AdaptiveModeSelectorKind::Model)) {
         selector = AdaptiveModeSelectorKind::Fixed;
     }
 

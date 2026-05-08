@@ -146,7 +146,10 @@ The server binds only to `127.0.0.1`.
     "slow_path_ratio": 0.12
   },
   "selector_last_window": {
+    "selector_backend": "model",
     "reason": "large_bytes_ratio",
+    "model_candidate": "large_object",
+    "model_confidence": 0.42,
     "large_bytes_ratio": 0.91,
     "remote_free_ratio": 0.0,
     "mapped_live_ratio": 1.3,
@@ -157,6 +160,9 @@ The server binds only to `127.0.0.1`.
       "current_mode": "balanced",
       "candidate_mode": "large_object",
       "switched": true,
+      "selector_backend": "model",
+      "model_candidate": "large_object",
+      "model_confidence": 0.42,
       "reason": "large_bytes_ratio"
     }
   ]

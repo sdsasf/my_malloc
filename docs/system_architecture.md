@@ -125,7 +125,7 @@ Summary:
 
 - Shared Memory Management Layer owns `AdaptiveHeader`, registry, page table, size-class pages, spans, direct mappings, free lists, reclaim, and telemetry events.
 - Adaptive Mode Policy Layer owns `AllocationPlan` and `ReleaseDecision` generation for `Balanced`, `ThroughputCache`, `DeterministicLatency`, `CompactRSS`, `FragmentationStable`, `CrossThreadMessage`, `LargeObjectStreaming`, and `HardenedDebug`.
-- Runtime Telemetry and Selector extracts `WorkloadFeatures`, applies rule selection with window/cooldown/hysteresis, and soft-switches active mode.
+- Runtime Telemetry and Selector extracts `WorkloadFeatures`, applies the offline-trained model selector with window/cooldown/hysteresis, and soft-switches active mode. The older rule selector is kept only as an explicit baseline.
 
 ## Validation And Benchmarking
 
