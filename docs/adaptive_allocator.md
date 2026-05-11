@@ -57,7 +57,7 @@ Modes do not directly mutate page/span/mmap internals.
 | `CompactRSS` | low-RSS, no thread cache, occupancy packing, direct map only above compact threshold, keep limit 0 | targeted purge/unmap of the emptied page/span | Fine-grained empty page/span reclaim implemented |
 | `FragmentationStable` | span/page storage with occupancy-aware packing and low keep limit; avoids turning medium objects into large direct maps | return to central pool with low keep limit; unmap only true direct mappings | Occupancy-aware reuse implemented; adaptive size-class table rebalance is future work |
 | `CrossThreadMessage` | owner-aware remote-free queue, owner-side drain on cache miss, moderate TLS magazine | remote frees enqueue to owner; local frees cache | Remote-free queue implemented for pooled objects |
-| `LargeObjectStreaming` | extent/direct-map path only for true large objects (`>=128 KiB`), small/medium stays in normal services, bounded large extent reuse cache | cache a small bounded direct-map extent ring, otherwise return/unmap | Large-object isolation no longer covers medium objects |
+| `LargeObjectStreaming` | direct-map isolation for streaming allocations, no TLS magazine, no retained empty cache, direct threshold `>=4 KiB` inside the mode | unmap direct mappings and purge small fallback pages | Specialized for large streams; intentionally worse for small/medium churn |
 | `HardenedDebug` | direct map, no reuse, header canary, tail redzone, quarantine intent | quarantine with poison/redzone checks | Header checks, double-free/invalid-free counters, poison, quarantine retention, and tail redzone validation implemented |
 
 ## Runtime Telemetry and Selector
@@ -88,8 +88,8 @@ Telemetry tracks:
 
 `WorkloadFeatures` includes:
 
-- small/medium/large object ratios;
-- large bytes ratio;
+- small/medium/large request-size ratios;
+- large bytes ratio based on true streaming-large requests above 256 KiB, not on the storage helper selected by the current mode;
 - size entropy;
 - cache hit rate and reuse rate;
 - remote-free ratio;
@@ -99,7 +99,7 @@ Telemetry tracks:
 - slow-path ratio;
 - safety error rate.
 
-The selector extracts these as delta-window features. Hot-path telemetry keeps cumulative counters for snapshots and JSON output, while `adaptive_extract_window_features()` advances an internal baseline and returns only the activity since the previous extraction. Gauge-style fields such as live bytes and mapped bytes remain current values so mapped/live pressure is evaluated against the allocator's actual retained memory.
+The selector extracts these as delta-window features. Hot-path telemetry keeps cumulative counters for snapshots and JSON output, while `adaptive_extract_window_features()` advances an internal baseline and returns only the activity since the previous extraction. Gauge-style fields such as live bytes and mapped bytes remain current values so mapped/live pressure is evaluated against the allocator's actual retained memory. Size profile telemetry is request-size based, so a mode cannot create a feedback loop by routing medium objects through DirectMap and then causing the next window to look like a large-object workload.
 
 At each selector window boundary, `src/adaptive_selector.cpp` records an
 `AdaptiveSelectorEvent` into a fixed-size ring buffer. Each event stores the
@@ -167,8 +167,8 @@ debug/baseline mode for comparing against the older rule implementation.
 
 Runtime guards:
 
-- `MY_MALLOC_ADAPTIVE_MODE_WINDOW` controls observation cadence;
-- `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` prevents switch thrashing;
+- `MY_MALLOC_ADAPTIVE_MODE_WINDOW` controls observation cadence, default `1024`;
+- `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` prevents switch thrashing, default `1` window;
 - expected-gain thresholds provide hysteresis;
 - `MY_MALLOC_ADAPTIVE_DEBUG_MODE=1` forces `HardenedDebug`;
 - `MY_MALLOC_ADAPTIVE_MODE_SELECTOR=fixed` keeps the configured mode;

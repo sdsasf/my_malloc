@@ -5,8 +5,11 @@ The training pipeline is deliberately measured-cost based:
 
 1. Load fixed-mode benchmark rows.
 2. Learn an objective-cost formula from pairwise measured outcomes inside each
-   workload window.
-3. Train a compact per-mode cost model on the learned objective labels.
+   workload window, with light regularization so one noisy metric cannot erase
+   the rest of the measured objective.
+3. Train a compact per-mode cost model on the learned objective labels. The
+   mode prior is shrunk toward the global measured cost so window features, not
+   a dataset-wide mode bias, drive the online decision.
 
 No hand-written per-mode oracle is used, and the online allocator does not mix
 this model with the legacy rule selector.
@@ -158,7 +161,8 @@ def majority_preference(a: Dict[str, float], b: Dict[str, float]) -> int:
 
 def learn_objective_model(rows: Sequence[Dict[str, object]],
                           epochs: int = 200,
-                          learning_rate: float = 0.08) -> ObjectiveModel:
+                          learning_rate: float = 0.08,
+                          regularization: float = 0.02) -> ObjectiveModel:
     normalized = normalized_metric_rows(rows)
     by_id = {int(item["__row_id"]): item for item in normalized}
     pairs: List[Tuple[int, int, int]] = []
@@ -191,6 +195,17 @@ def learn_objective_model(rows: Sequence[Dict[str, object]],
                         weights = [1.0 / len(OBJECTIVE_METRICS)] * len(OBJECTIVE_METRICS)
                     else:
                         weights = [w / total for w in weights]
+            if regularization > 0.0:
+                # This is still a learned objective. The shrink step only
+                # prevents tiny benchmark sets from collapsing the objective to
+                # one metric and making the selector a global mode prior.
+                uniform = 1.0 / len(weights)
+                weights = [
+                    (1.0 - regularization) * w + regularization * uniform
+                    for w in weights
+                ]
+                total = sum(weights)
+                weights = [w / total for w in weights]
     correct = 0
     for ia, ib, pref in pairs:
         a = by_id[ia]
@@ -249,7 +264,8 @@ def load_fixed_rows(path: str) -> List[Dict[str, object]]:
 
 
 def load_examples(path: str, objective: ObjectiveModel,
-                  fixed_rows: Sequence[Dict[str, object]]) -> List[Example]:
+                  fixed_rows: Sequence[Dict[str, object]],
+                  signature_source: str) -> List[Example]:
     normalized = normalized_metric_rows(fixed_rows)
     normalized_by_workload: Dict[str, List[Tuple[Dict[str, object], Dict[str, float]]]] = {}
     for row, norm in zip(fixed_rows, normalized):
@@ -265,7 +281,18 @@ def load_examples(path: str, objective: ObjectiveModel,
         # a different measured target cost. Using per-mode generated features as
         # the input for that same mode would leak allocator behavior into the
         # feature vector and make online all-candidate scoring inconsistent.
-        projected = [row_features(row) for row in workload_rows]
+        if signature_source == "balanced":
+            signature_rows = [
+                row for row in workload_rows
+                if str(row.get("case", "")) == "fixed:balanced"
+            ]
+            if not signature_rows:
+                signature_rows = workload_rows
+        elif signature_source == "mean":
+            signature_rows = workload_rows
+        else:
+            raise ValueError(f"unsupported signature source: {signature_source}")
+        projected = [row_features(row) for row in signature_rows]
         signature = [
             sum(features[i] for features in projected) / len(projected)
             for i in range(len(FEATURES))
@@ -319,16 +346,22 @@ def best_stump(examples: Sequence[Example], residuals: Sequence[float], mode: in
 
 
 def train(examples: Sequence[Example], rounds_per_mode: int,
-          learning_rate: float) -> Tuple[List[float], List[Stump]]:
+          learning_rate: float,
+          mode_prior_shrink: float) -> Tuple[List[float], List[Stump]]:
     biases = [1.0] * len(MODES)
     trees: List[Stump] = []
+    global_mean = sum(e.target for e in examples) / len(examples)
     for mode in range(len(MODES)):
         mode_examples = [e for e in examples if e.mode == mode]
         if not mode_examples:
             biases[mode] = 10.0
             continue
-        predictions = [sum(e.target for e in mode_examples) / len(mode_examples)] * len(mode_examples)
-        biases[mode] = predictions[0]
+        mode_mean = sum(e.target for e in mode_examples) / len(mode_examples)
+        biases[mode] = (
+            (1.0 - mode_prior_shrink) * mode_mean
+            + mode_prior_shrink * global_mean
+        )
+        predictions = [biases[mode]] * len(mode_examples)
         for _ in range(rounds_per_mode):
             residuals = [e.target - p for e, p in zip(mode_examples, predictions)]
             stump = best_stump(mode_examples, residuals, mode)
@@ -441,14 +474,38 @@ def main() -> int:
     parser.add_argument("--summary-out", default="models/selector_training_summary.json")
     parser.add_argument("--rounds-per-mode", type=int, default=6)
     parser.add_argument("--learning-rate", type=float, default=0.35)
+    parser.add_argument("--objective-epochs", type=int, default=200)
+    parser.add_argument("--objective-learning-rate", type=float, default=0.08)
+    parser.add_argument("--objective-regularization", type=float, default=0.02)
+    parser.add_argument("--mode-prior-shrink", type=float, default=0.65)
+    parser.add_argument(
+        "--signature-source",
+        choices=("balanced", "mean"),
+        default="balanced",
+        help=(
+            "feature signature shared by all candidates in a workload. "
+            "'balanced' approximates a selector-visible baseline window; "
+            "'mean' keeps the historical cross-mode averaged signature."
+        ),
+    )
     args = parser.parse_args()
 
     fixed_rows = load_fixed_rows(args.dataset)
-    objective = learn_objective_model(fixed_rows)
-    examples = load_examples(args.dataset, objective, fixed_rows)
+    objective = learn_objective_model(
+        fixed_rows,
+        epochs=args.objective_epochs,
+        learning_rate=args.objective_learning_rate,
+        regularization=args.objective_regularization,
+    )
+    examples = load_examples(args.dataset, objective, fixed_rows, args.signature_source)
     train_set, test_set = split_examples(examples)
-    biases, trees = train(train_set, args.rounds_per_mode, args.learning_rate)
-    model_id = f"learned_cost_gbdt_v2_n{len(train_set)}_t{len(trees)}"
+    biases, trees = train(
+        train_set,
+        args.rounds_per_mode,
+        args.learning_rate,
+        args.mode_prior_shrink,
+    )
+    model_id = f"learned_cost_gbdt_v3_n{len(train_set)}_t{len(trees)}"
     write_header(args.model_out, model_id, biases, trees, objective.switch_cost)
     summary = {
         "model_id": model_id,
@@ -461,6 +518,8 @@ def main() -> int:
             "test_examples": len(test_set),
             "rounds_per_mode": args.rounds_per_mode,
             "learning_rate": args.learning_rate,
+            "mode_prior_shrink": args.mode_prior_shrink,
+            "signature_source": args.signature_source,
             "tree_count": len(trees),
             "label_source": "learned objective cost from fixed-mode measured benchmark rows",
             "objective_model": {
@@ -468,6 +527,9 @@ def main() -> int:
                 "weights": {m: objective.weights[i] for i, m in enumerate(objective.metrics)},
                 "switch_cost": objective.switch_cost,
                 "pairwise_accuracy": objective.pairwise_accuracy,
+                "epochs": args.objective_epochs,
+                "learning_rate": args.objective_learning_rate,
+                "regularization": args.objective_regularization,
             },
         },
         "train_metrics": evaluate(train_set, biases, trees),

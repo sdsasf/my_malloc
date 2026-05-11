@@ -110,7 +110,7 @@ features:
 
 | Generated feature | Source field | Meaning |
 |---|---|---|
-| `LargeBytesRatio` | `large_bytes_ratio` | fraction of requested bytes from large allocations |
+| `LargeBytesRatio` | `large_bytes_ratio` | fraction of requested bytes from true streaming-large allocations above 256 KiB |
 | `RemoteFreeRatio` | `remote_free_ratio` | fraction of frees done by a non-owner thread |
 | `MappedLiveRatio` | `mapped_live_ratio` | mapped bytes divided by live bytes |
 | `SlowPathRatio` | `slow_path_ratio` | allocator slow-path intensity in the window |
@@ -123,6 +123,9 @@ features:
 
 The larger `WorkloadFeatures` structure remains the stable telemetry API. The
 generated model uses a smaller projection so online inference stays cheap.
+`LargeBytesRatio` is computed from request-size buckets, not from DirectMap
+storage counters, so the active mode cannot create a self-reinforcing
+large-object signal by routing medium objects through a direct-map path.
 
 ## Model Structure
 
@@ -224,6 +227,15 @@ written to `models/selector_training_summary.json` and the generated C++ model.
 The evaluation report loads those learned weights instead of using a separate
 hand-written score formula.
 
+Training also uses two regularizers and one leakage guard:
+
+- objective weights are lightly shrunk toward a uniform metric prior, so a small
+  benchmark set cannot collapse the learned cost onto one noisy metric;
+- per-mode base costs are shrunk toward the global measured cost, so window
+  features rather than a dataset-wide mode prior drive decisions;
+- the shared candidate signature comes from the fixed `balanced` run for the
+  workload, avoiding leakage from a candidate mode's own storage behavior.
+
 ## Checked-In Training Result
 
 The checked-in model is generated from:
@@ -237,6 +249,9 @@ test examples: 196
 rounds_per_mode: 10
 tree_count: 70
 learning_rate: 0.35
+signature_source: balanced
+mode_prior_shrink: 0.75
+objective_regularization: 0.04
 ```
 
 The summary is stored in `models/selector_training_summary.json`.
@@ -245,20 +260,20 @@ Current measured-label test metrics:
 
 | Metric | Value |
 |---|---:|
-| learned objective pairwise accuracy | 0.943 |
-| top-1 accuracy vs learned-cost best | 0.643 |
-| mean regret | 0.0030 |
+| learned objective pairwise accuracy | 0.966 |
+| top-1 accuracy vs learned-cost best | 0.464 |
+| mean regret | 0.0377 |
 | test workloads | 28 |
 | test examples | 196 |
 
 The post-training evaluation is stored in
 [adaptive_selector_model_results.md](adaptive_selector_model_results.md).
 On the current generated workload suite, `model` improves over the legacy rule
-selector's mean score and wins the largest number of held-out workload cases.
-The best fixed `large_object` baseline still has the lowest mean score, which
-is useful residual evidence: fixed large-object behavior is still very strong
-on several generated traces, while model soft switching now wins many
-phase-changing and remote/mixed cases.
+selector's mean score and has the best mean score among the compared adaptive
+cases. The fixed `large_object` baseline is no longer a dominant winner; it is
+best mainly on true large-streaming cases, while model final modes are spread
+across `balanced`, `throughput_cache`, `deterministic_latency`, and
+`large_object`.
 
 ## Selector Backends
 
@@ -301,6 +316,8 @@ Switching controls:
 
 - cooldown prevents window-to-window oscillation;
 - model-confidence hysteresis blocks low-impact switches;
+- the default cadence is `MY_MALLOC_ADAPTIVE_MODE_WINDOW=1024` with one
+  cooldown window; visual demos can lower the window explicitly;
 - explicit `MY_MALLOC_ADAPTIVE_DEBUG_MODE=1` starts the allocator in
   `HardenedDebug`, but auto model decisions are not mixed with rule decisions.
 

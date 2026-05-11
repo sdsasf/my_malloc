@@ -9,7 +9,7 @@ The project tries to reproduce the core ideas of industrial allocators without f
 The project is organized around four parts:
 
 1. **Allocator lab**: simplified implementations of classic industrial allocator ideas for learning and comparison.
-2. **Adaptive allocator**: an independent experimental allocator with shared adaptive metadata, a mode table, allocation-time mode routing, workload telemetry, and rule-based soft switching.
+2. **Adaptive allocator**: an independent experimental allocator with shared adaptive metadata, a mode table, allocation-time mode routing, workload telemetry, and offline-trained model soft switching.
 3. **Common harness**: validation, built-in benchmarks, optional external benchmarks, and LD_PRELOAD smoke tests.
 4. **Technical docs**: design documents for each allocator, including architecture, data structures, simplifications, and benchmark guidance.
 
@@ -152,8 +152,8 @@ Important adaptive knobs:
 |---|---|
 | `MY_MALLOC_ADAPTIVE_MODE` | `balanced`, `throughput_cache`, `deterministic_latency`, `compact_rss`, `fragmentation_stable`, `cross_thread`, `large_object`, `hardened_debug`, or `auto`. |
 | `MY_MALLOC_ADAPTIVE_MODE_SELECTOR` | `model` by default; `rule` is a legacy/debug baseline; `fixed` and `manual` are test controls. |
-| `MY_MALLOC_ADAPTIVE_MODE_WINDOW` | Selector observation window. |
-| `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` | Cooldown in windows after a mode switch. |
+| `MY_MALLOC_ADAPTIVE_MODE_WINDOW` | Selector observation window. Default: `1024` allocation/free observations. |
+| `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` | Cooldown in windows after a mode switch. Default: `1`. |
 | `MY_MALLOC_ADAPTIVE_DEBUG_MODE` | Force `hardened_debug` when set to `1`. |
 | `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` | Initial small-object page size. |
 | `MY_MALLOC_ADAPTIVE_MEDIUM_SPAN_SIZE` | Initial medium-object span size. |
@@ -170,8 +170,11 @@ The current mode split is workload-oriented rather than size-path-oriented:
 `throughput_cache` uses large thread-local magazines and batch refill for
 same-thread churn, `compact_rss` aggressively purges empty pages/spans,
 `cross_thread` routes remote frees through owner queues, `fragmentation_stable`
-packs partial pages/spans by occupancy, and `large_object` is restricted to
-true large objects plus a bounded extent reuse ring.
+packs partial pages/spans by occupancy, and `large_object` isolates streaming
+large allocations with direct mapping and immediate unmap/release decisions.
+Selector size telemetry is request-size based: `large_bytes_ratio` counts only
+true streaming-large requests above 256 KiB, so medium fragmentation workloads do
+not feed back into `large_object` just because a mode used DirectMap internally.
 
 Enable optional observability:
 
@@ -274,5 +277,5 @@ Full benchmark instructions and current results:
 - Cross-thread slab frees do not yet use owner-thread remote-free queues.
 - The size-class table is simple 16-byte spacing, not a production-tuned table.
 - Large allocation and extent management are simpler than jemalloc/tcmalloc/mimalloc.
-- The adaptive backend now has shared memory services, `AllocationPlan` / `ReleaseDecision` mode policy, allocation-time `mode_id`, mode-specific thread-local cache limits, owner-keyed remote-free queues, compact targeted reclaim, fragmentation-stable waste-aware medium routing, hardened debug canary/redzone checks, owner-thread telemetry, rule-based soft switching, and per-mode stats. It still lacks dynamic tcache tuning, abandoned-owner cleanup, adaptive size-class-table rebalancing, sampled p99 latency, and front-redzone/page-guard debug variants.
+- The adaptive backend now has shared memory services, `AllocationPlan` / `ReleaseDecision` mode policy, allocation-time `mode_id`, mode-specific thread-local cache limits, owner-keyed remote-free queues, compact targeted reclaim, fragmentation-stable waste-aware medium routing, hardened debug canary/redzone checks, owner-thread telemetry, model-based soft switching, and per-mode stats. It still lacks dynamic tcache tuning, abandoned-owner cleanup, adaptive size-class-table rebalancing, sampled p99 latency, and front-redzone/page-guard debug variants.
 - External benchmark coverage depends on local tools such as Redis, glibc benchtests, SQLite, clang, Z3, jemalloc, tcmalloc, and mimalloc.

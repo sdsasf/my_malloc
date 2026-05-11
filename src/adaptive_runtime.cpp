@@ -17,8 +17,8 @@ namespace {
 constexpr size_t ADAPTIVE_SMALL_PAGE_SIZE = 64 * 1024;
 constexpr size_t ADAPTIVE_MEDIUM_SPAN_SIZE = 256 * 1024;
 constexpr uint32_t ADAPTIVE_DEFAULT_EMPTY_CACHE_LIMIT = 2;
-constexpr uint32_t ADAPTIVE_DEFAULT_MODE_WINDOW = 4096;
-constexpr uint32_t ADAPTIVE_DEFAULT_MODE_COOLDOWN = 2;
+constexpr uint32_t ADAPTIVE_DEFAULT_MODE_WINDOW = 1024;
+constexpr uint32_t ADAPTIVE_DEFAULT_MODE_COOLDOWN = 1;
 
 pthread_once_t g_runtime_once = PTHREAD_ONCE_INIT;
 std::mutex g_runtime_mutex;

@@ -70,8 +70,11 @@ not load frontend assets, and no frontend code is embedded in the allocator hot
 path.
 
 The mode timeline explains decisions in plain terms, for example
-`balanced -> large_object` with reason `large_bytes_ratio` and the feature value
-that triggered the candidate mode.
+`balanced -> large_object` with reason `model_cost` and the feature values that
+made the generated model prefer the candidate. `large_bytes_ratio` is a
+request-size signal for allocations above 256 KiB, not a DirectMap storage
+counter, so the UI does not report a large-object phase simply because a mode
+used direct mapping internally.
 
 Runtime charts are split by signal instead of drawing every metric on one shared
 normalized axis. Each signal has its own min/max scale, current value label, and

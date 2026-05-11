@@ -10,8 +10,12 @@ namespace my_ptmalloc {
 
 namespace {
 
+static constexpr size_t SIZE_BUCKET_COUNT = 10;
+static constexpr size_t FIRST_LARGE_SIZE_BUCKET = 8; // request size > 256 KiB
+
 AdaptiveStats g_stats;
-std::atomic<uint64_t> g_size_histogram[8]{};
+std::atomic<uint64_t> g_size_histogram[SIZE_BUCKET_COUNT]{};
+std::atomic<uint64_t> g_size_bytes_histogram[SIZE_BUCKET_COUNT]{};
 
 struct TelemetryCounters {
     uint64_t malloc_calls = 0;
@@ -28,7 +32,8 @@ struct TelemetryCounters {
     uint64_t storage_usable_bytes[AdaptiveStats::NUM_STORAGE_HELPERS]{};
     uint64_t storage_pool_hits[AdaptiveStats::NUM_STORAGE_HELPERS]{};
     uint64_t storage_pool_misses[AdaptiveStats::NUM_STORAGE_HELPERS]{};
-    uint64_t size_histogram[8]{};
+    uint64_t size_histogram[SIZE_BUCKET_COUNT]{};
+    uint64_t size_bytes_histogram[SIZE_BUCKET_COUNT]{};
     uint64_t mapped_bytes = 0;
     uint64_t live_bytes = 0;
 };
@@ -53,7 +58,9 @@ static size_t size_histogram_index(size_t size) noexcept {
     if (size <= 1024) return 4;
     if (size <= 4096) return 5;
     if (size <= 64 * 1024) return 6;
-    return 7;
+    if (size <= 256 * 1024) return 7;
+    if (size <= 1024 * 1024) return 8;
+    return 9;
 }
 
 static double ratio_u64(uint64_t num, uint64_t den) noexcept {
@@ -88,8 +95,9 @@ static TelemetryCounters read_counters() noexcept {
         c.storage_pool_hits[i] = g_stats.storage[i].pool_hits.load(std::memory_order_relaxed);
         c.storage_pool_misses[i] = g_stats.storage[i].pool_misses.load(std::memory_order_relaxed);
     }
-    for (size_t i = 0; i < 8; ++i) {
+    for (size_t i = 0; i < SIZE_BUCKET_COUNT; ++i) {
         c.size_histogram[i] = g_size_histogram[i].load(std::memory_order_relaxed);
+        c.size_bytes_histogram[i] = g_size_bytes_histogram[i].load(std::memory_order_relaxed);
     }
     return c;
 }
@@ -116,8 +124,10 @@ static TelemetryCounters delta_counters(const TelemetryCounters& current,
         d.storage_pool_hits[i] = delta_u64(current.storage_pool_hits[i], base.storage_pool_hits[i]);
         d.storage_pool_misses[i] = delta_u64(current.storage_pool_misses[i], base.storage_pool_misses[i]);
     }
-    for (size_t i = 0; i < 8; ++i) {
+    for (size_t i = 0; i < SIZE_BUCKET_COUNT; ++i) {
         d.size_histogram[i] = delta_u64(current.size_histogram[i], base.size_histogram[i]);
+        d.size_bytes_histogram[i] =
+            delta_u64(current.size_bytes_histogram[i], base.size_bytes_histogram[i]);
     }
     return d;
 }
@@ -141,11 +151,28 @@ static WorkloadFeatures features_from_counters(const TelemetryCounters& c) noexc
         hits += c.storage_pool_hits[i];
         misses += c.storage_pool_misses[i];
     }
-    uint64_t small_count = c.storage_alloc_count[storage_index(AdaptiveStorageId::SizeClass)];
-    uint64_t medium_count = c.storage_alloc_count[storage_index(AdaptiveStorageId::Span)];
-    uint64_t large_count = c.storage_alloc_count[storage_index(AdaptiveStorageId::DirectMap)];
+    // Size profile is based on requested allocation size, not the storage path
+    // selected by the current mode. Otherwise a DirectMap-heavy mode can create
+    // a feedback loop where its own storage decision makes the next window look
+    // like a large-object workload.
+    uint64_t requested_by_size = 0;
+    for (size_t i = 0; i < SIZE_BUCKET_COUNT; ++i) requested_by_size += c.size_bytes_histogram[i];
+    if (requested_by_size > 0) requested = requested_by_size;
+    uint64_t small_count = 0;
+    uint64_t medium_count = 0;
+    uint64_t large_count = 0;
+    uint64_t large_bytes = 0;
+    for (size_t i = 0; i < SIZE_BUCKET_COUNT; ++i) {
+        if (i <= 4) {
+            small_count += c.size_histogram[i];
+        } else if (i < FIRST_LARGE_SIZE_BUCKET) {
+            medium_count += c.size_histogram[i];
+        } else {
+            large_count += c.size_histogram[i];
+            large_bytes += c.size_bytes_histogram[i];
+        }
+    }
     uint64_t count_total = small_count + medium_count + large_count;
-    uint64_t large_bytes = c.storage_requested_bytes[storage_index(AdaptiveStorageId::DirectMap)];
     uint64_t thread_frees = f.remote_free_count + f.same_thread_free_count;
     uint64_t safety = c.invalid_free_count + c.double_free_count + c.header_corruption_count;
     uint64_t slow = c.slow_path_count + c.mmap_count + misses;
@@ -167,9 +194,9 @@ static WorkloadFeatures features_from_counters(const TelemetryCounters& c) noexc
     f.safety_error_rate = ratio_u64(safety, f.free_calls + f.alloc_calls);
 
     uint64_t hist_total = 0;
-    for (size_t i = 0; i < 8; ++i) hist_total += c.size_histogram[i];
+    for (size_t i = 0; i < SIZE_BUCKET_COUNT; ++i) hist_total += c.size_histogram[i];
     if (hist_total > 0) {
-        for (size_t i = 0; i < 8; ++i) {
+        for (size_t i = 0; i < SIZE_BUCKET_COUNT; ++i) {
             if (c.size_histogram[i] == 0) continue;
             double p = static_cast<double>(c.size_histogram[i]) / static_cast<double>(hist_total);
             f.size_entropy -= p * (std::log(p) / std::log(2.0));
@@ -196,7 +223,9 @@ void adaptive_telemetry_on_alloc(const AllocationResult& result) noexcept {
     }
     if (result.used_mmap) g_stats.mmap_count.fetch_add(1, std::memory_order_relaxed);
     if (result.slow_path) g_stats.slow_path_count.fetch_add(1, std::memory_order_relaxed);
-    g_size_histogram[size_histogram_index(result.requested)].fetch_add(1, std::memory_order_relaxed);
+    size_t size_bucket = size_histogram_index(result.requested);
+    g_size_histogram[size_bucket].fetch_add(1, std::memory_order_relaxed);
+    g_size_bytes_histogram[size_bucket].fetch_add(result.requested, std::memory_order_relaxed);
     g_stats.live_bytes.fetch_add(static_cast<int64_t>(result.usable), std::memory_order_relaxed);
     auto& mode = g_stats.mode[adaptive_mode_index(result.header->mode_id)];
     mode.alloc_count.fetch_add(1, std::memory_order_relaxed);
@@ -385,8 +414,9 @@ void adaptive_stats_reset() noexcept {
     }
     g_stats.live_bytes.store(0, std::memory_order_relaxed);
     g_stats.mapped_bytes.store(0, std::memory_order_relaxed);
-    for (size_t i = 0; i < 8; ++i) {
+    for (size_t i = 0; i < SIZE_BUCKET_COUNT; ++i) {
         g_size_histogram[i].store(0, std::memory_order_relaxed);
+        g_size_bytes_histogram[i].store(0, std::memory_order_relaxed);
     }
 }
 

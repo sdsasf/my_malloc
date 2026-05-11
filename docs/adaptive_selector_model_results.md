@@ -1,6 +1,6 @@
 # Adaptive Selector Model Evaluation Results
 
-Generated at: `2026-05-11 21:16:19 +0800`
+Generated at: `2026-05-11 22:01:52 +0800`
 
 These measurements compare fixed adaptive modes against the measured-cost `model` selector on the generated workload suite. When requested, the legacy `rule` selector is included only as a baseline. Lower score is better.
 
@@ -16,555 +16,555 @@ Score is normalized per workload across all compared cases. The metric weights a
 
 | Metric | Weight | Direction |
 |---|---:|---|
-| `fragmentation_estimate` | 0.00 | lower is better |
-| `mapped_live_ratio` | 0.26 | lower is better |
-| `mode_switches` | 0.00 | lower is better |
-| `ms` | 0.13 | lower is better |
-| `peak_rss_kb` | 0.15 | lower is better |
-| `slow_path_ratio` | 0.46 | lower is better |
-| `validation_errors` | 0.00 | lower is better |
+| `fragmentation_estimate` | 0.32 | lower is better |
+| `mapped_live_ratio` | 0.13 | lower is better |
+| `mode_switches` | 0.01 | lower is better |
+| `ms` | 0.17 | lower is better |
+| `peak_rss_kb` | 0.21 | lower is better |
+| `slow_path_ratio` | 0.15 | lower is better |
+| `validation_errors` | 0.01 | lower is better |
 
 ## Overall Ranking
 
 | Rank | Case | Mean score | Mean ops/sec | Mean peak RSS KB | Mean switches | Best workload count |
 |---:|---|---:|---:|---:|---:|---:|
-| 1 | `fixed:large_object` | 0.253 | 2445454 | 29131 | 0.0 | 4 |
-| 2 | `selector:model` | 0.273 | 1905472 | 27753 | 11.3 | 15 |
-| 3 | `fixed:fragmentation_stable` | 0.324 | 2304371 | 29221 | 0.0 | 2 |
-| 4 | `fixed:balanced` | 0.346 | 2198259 | 29530 | 0.0 | 0 |
-| 5 | `fixed:deterministic_latency` | 0.362 | 2490116 | 29795 | 0.0 | 1 |
-| 6 | `fixed:cross_thread` | 0.398 | 2431532 | 30014 | 0.0 | 4 |
-| 7 | `fixed:throughput_cache` | 0.406 | 2389145 | 30113 | 0.0 | 2 |
-| 8 | `selector:rule` | 0.406 | 2019618 | 29363 | 2.5 | 2 |
-| 9 | `fixed:compact_rss` | 0.512 | 1073329 | 27462 | 0.0 | 5 |
+| 1 | `selector:model` | 0.238 | 1826740 | 27941 | 8.1 | 7 |
+| 2 | `fixed:fragmentation_stable` | 0.252 | 2367375 | 29114 | 0.0 | 9 |
+| 3 | `fixed:balanced` | 0.252 | 2226204 | 29448 | 0.0 | 2 |
+| 4 | `fixed:deterministic_latency` | 0.276 | 2472478 | 29718 | 0.0 | 2 |
+| 5 | `fixed:throughput_cache` | 0.298 | 2551533 | 30021 | 0.0 | 3 |
+| 6 | `fixed:large_object` | 0.299 | 1095295 | 27165 | 0.0 | 9 |
+| 7 | `fixed:cross_thread` | 0.308 | 2515009 | 29923 | 0.0 | 1 |
+| 8 | `fixed:compact_rss` | 0.345 | 1125499 | 27361 | 0.0 | 2 |
+| 9 | `selector:rule` | 0.366 | 1619620 | 29593 | 1.6 | 0 |
 
 ## Per-Workload Winners
 
 | Workload | Best overall | Best fixed mode | Model selector |
 |---|---|---|---|
 | `adaptive_mix:seed20001` | `selector:model` | `fixed:large_object` | `selector:model` |
-| `adaptive_mix:seed20002` | `selector:model` | `fixed:large_object` | `selector:model` |
+| `adaptive_mix:seed20002` | `selector:model` | `fixed:fragmentation_stable` | `selector:model` |
 | `adaptive_mix:seed20003` | `selector:model` | `fixed:large_object` | `selector:model` |
-| `adaptive_mix:seed20004` | `selector:model` | `fixed:large_object` | `selector:model` |
-| `adaptive_mix:seed20005` | `selector:model` | `fixed:large_object` | `selector:model` |
+| `adaptive_mix:seed20004` | `selector:model` | `fixed:fragmentation_stable` | `selector:model` |
+| `adaptive_mix:seed20005` | `selector:model` | `fixed:fragmentation_stable` | `selector:model` |
 | `fragmentation_drift:seed20001` | `fixed:large_object` | `fixed:large_object` | `selector:model` |
 | `fragmentation_drift:seed20002` | `fixed:large_object` | `fixed:large_object` | `selector:model` |
 | `fragmentation_drift:seed20003` | `fixed:large_object` | `fixed:large_object` | `selector:model` |
 | `fragmentation_drift:seed20004` | `fixed:large_object` | `fixed:large_object` | `selector:model` |
-| `fragmentation_drift:seed20005` | `selector:rule` | `fixed:large_object` | `selector:model` |
+| `fragmentation_drift:seed20005` | `fixed:large_object` | `fixed:large_object` | `selector:model` |
 | `large_burst:seed20001` | `fixed:cross_thread` | `fixed:cross_thread` | `selector:model` |
-| `large_burst:seed20002` | `fixed:throughput_cache` | `fixed:throughput_cache` | `selector:model` |
-| `large_burst:seed20003` | `selector:rule` | `fixed:cross_thread` | `selector:model` |
+| `large_burst:seed20002` | `selector:model` | `fixed:fragmentation_stable` | `selector:model` |
+| `large_burst:seed20003` | `fixed:deterministic_latency` | `fixed:deterministic_latency` | `selector:model` |
 | `large_burst:seed20004` | `fixed:fragmentation_stable` | `fixed:fragmentation_stable` | `selector:model` |
-| `large_burst:seed20005` | `fixed:cross_thread` | `fixed:cross_thread` | `selector:model` |
+| `large_burst:seed20005` | `selector:model` | `fixed:cross_thread` | `selector:model` |
 | `latency_loop:seed20001` | `fixed:compact_rss` | `fixed:compact_rss` | `selector:model` |
-| `latency_loop:seed20002` | `fixed:compact_rss` | `fixed:compact_rss` | `selector:model` |
-| `latency_loop:seed20003` | `fixed:compact_rss` | `fixed:compact_rss` | `selector:model` |
+| `latency_loop:seed20002` | `fixed:large_object` | `fixed:large_object` | `selector:model` |
+| `latency_loop:seed20003` | `fixed:large_object` | `fixed:large_object` | `selector:model` |
 | `latency_loop:seed20004` | `fixed:compact_rss` | `fixed:compact_rss` | `selector:model` |
-| `latency_loop:seed20005` | `fixed:compact_rss` | `fixed:compact_rss` | `selector:model` |
-| `remote_queue:seed20001` | `selector:model` | `fixed:large_object` | `selector:model` |
-| `remote_queue:seed20002` | `selector:model` | `fixed:balanced` | `selector:model` |
-| `remote_queue:seed20003` | `selector:model` | `fixed:large_object` | `selector:model` |
-| `remote_queue:seed20004` | `selector:model` | `fixed:fragmentation_stable` | `selector:model` |
-| `remote_queue:seed20005` | `selector:model` | `fixed:large_object` | `selector:model` |
-| `rss_peak_release:seed20001` | `selector:model` | `fixed:large_object` | `selector:model` |
-| `rss_peak_release:seed20002` | `selector:model` | `fixed:large_object` | `selector:model` |
-| `rss_peak_release:seed20003` | `selector:model` | `fixed:balanced` | `selector:model` |
-| `rss_peak_release:seed20004` | `selector:model` | `fixed:large_object` | `selector:model` |
-| `rss_peak_release:seed20005` | `selector:model` | `fixed:balanced` | `selector:model` |
-| `throughput_churn:seed20001` | `fixed:cross_thread` | `fixed:cross_thread` | `selector:model` |
-| `throughput_churn:seed20002` | `fixed:fragmentation_stable` | `fixed:fragmentation_stable` | `selector:model` |
-| `throughput_churn:seed20003` | `fixed:cross_thread` | `fixed:cross_thread` | `selector:model` |
-| `throughput_churn:seed20004` | `fixed:throughput_cache` | `fixed:throughput_cache` | `selector:model` |
-| `throughput_churn:seed20005` | `fixed:deterministic_latency` | `fixed:deterministic_latency` | `selector:model` |
+| `latency_loop:seed20005` | `fixed:large_object` | `fixed:large_object` | `selector:model` |
+| `remote_queue:seed20001` | `fixed:large_object` | `fixed:large_object` | `selector:model` |
+| `remote_queue:seed20002` | `fixed:fragmentation_stable` | `fixed:fragmentation_stable` | `selector:model` |
+| `remote_queue:seed20003` | `fixed:balanced` | `fixed:balanced` | `selector:model` |
+| `remote_queue:seed20004` | `fixed:fragmentation_stable` | `fixed:fragmentation_stable` | `selector:model` |
+| `remote_queue:seed20005` | `fixed:balanced` | `fixed:balanced` | `selector:model` |
+| `rss_peak_release:seed20001` | `fixed:fragmentation_stable` | `fixed:fragmentation_stable` | `selector:model` |
+| `rss_peak_release:seed20002` | `fixed:fragmentation_stable` | `fixed:fragmentation_stable` | `selector:model` |
+| `rss_peak_release:seed20003` | `fixed:fragmentation_stable` | `fixed:fragmentation_stable` | `selector:model` |
+| `rss_peak_release:seed20004` | `fixed:fragmentation_stable` | `fixed:fragmentation_stable` | `selector:model` |
+| `rss_peak_release:seed20005` | `fixed:fragmentation_stable` | `fixed:fragmentation_stable` | `selector:model` |
+| `throughput_churn:seed20001` | `fixed:fragmentation_stable` | `fixed:fragmentation_stable` | `selector:model` |
+| `throughput_churn:seed20002` | `fixed:throughput_cache` | `fixed:throughput_cache` | `selector:model` |
+| `throughput_churn:seed20003` | `fixed:throughput_cache` | `fixed:throughput_cache` | `selector:model` |
+| `throughput_churn:seed20004` | `fixed:deterministic_latency` | `fixed:deterministic_latency` | `selector:model` |
+| `throughput_churn:seed20005` | `fixed:throughput_cache` | `fixed:throughput_cache` | `selector:model` |
 
 ## `adaptive_mix:seed20001` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.083 | 184645 | 37468 | `compact_rss` | 5 | 121.54 | 0.005 | 0.472 |
-| `fixed:large_object` | 0.253 | 213454 | 42804 | `large_object` | 0 | 3949.39 | 0.005 | 0.405 |
-| `fixed:fragmentation_stable` | 0.288 | 203453 | 42712 | `fragmentation_stable` | 0 | 3840.76 | 0.005 | 0.451 |
-| `selector:rule` | 0.330 | 196015 | 43512 | `compact_rss` | 10 | 5556.80 | 0.005 | 0.408 |
-| `fixed:balanced` | 0.380 | 182277 | 43984 | `balanced` | 0 | 5639.60 | 0.005 | 0.448 |
-| `fixed:deterministic_latency` | 0.420 | 192228 | 44288 | `deterministic_latency` | 0 | 6757.79 | 0.005 | 0.448 |
-| `fixed:cross_thread` | 0.435 | 199241 | 44160 | `cross_thread` | 0 | 7292.58 | 0.005 | 0.451 |
-| `fixed:throughput_cache` | 0.457 | 192203 | 44160 | `throughput_cache` | 0 | 7754.44 | 0.005 | 0.456 |
-| `fixed:compact_rss` | 0.588 | 73963 | 36508 | `compact_rss` | 0 | 109.39 | 0.005 | 0.983 |
+| `selector:model` | 0.213 | 160399 | 38212 | `throughput_cache` | 9 | 3062.88 | 0.004 | 0.744 |
+| `fixed:large_object` | 0.313 | 72336 | 35692 | `large_object` | 0 | 62.29 | 0.004 | 1.267 |
+| `fixed:fragmentation_stable` | 0.560 | 218530 | 42720 | `fragmentation_stable` | 0 | 3840.76 | 0.005 | 0.451 |
+| `fixed:compact_rss` | 0.565 | 86952 | 36592 | `compact_rss` | 0 | 109.39 | 0.005 | 0.983 |
+| `fixed:balanced` | 0.619 | 214104 | 43860 | `balanced` | 0 | 5639.60 | 0.005 | 0.448 |
+| `fixed:deterministic_latency` | 0.638 | 234396 | 44160 | `deterministic_latency` | 0 | 6806.41 | 0.005 | 0.448 |
+| `selector:rule` | 0.649 | 180633 | 44128 | `compact_rss` | 7 | 5202.04 | 0.005 | 0.473 |
+| `fixed:cross_thread` | 0.649 | 225773 | 44160 | `cross_thread` | 0 | 7243.96 | 0.005 | 0.451 |
+| `fixed:throughput_cache` | 0.663 | 222294 | 44288 | `throughput_cache` | 0 | 7754.44 | 0.005 | 0.456 |
 
 ## `adaptive_mix:seed20002` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.090 | 185547 | 39744 | `compact_rss` | 5 | 121.54 | 0.004 | 0.492 |
-| `fixed:large_object` | 0.236 | 199120 | 44236 | `large_object` | 0 | 3945.59 | 0.004 | 0.412 |
-| `fixed:fragmentation_stable` | 0.292 | 180554 | 44720 | `fragmentation_stable` | 0 | 3840.76 | 0.004 | 0.467 |
-| `selector:rule` | 0.324 | 190040 | 44528 | `compact_rss` | 12 | 5549.20 | 0.004 | 0.446 |
-| `fixed:balanced` | 0.360 | 184936 | 45372 | `balanced` | 0 | 5688.21 | 0.004 | 0.462 |
-| `fixed:deterministic_latency` | 0.420 | 185936 | 46208 | `deterministic_latency` | 0 | 7049.50 | 0.004 | 0.462 |
-| `fixed:cross_thread` | 0.444 | 178084 | 46208 | `cross_thread` | 0 | 7535.67 | 0.004 | 0.467 |
-| `fixed:throughput_cache` | 0.460 | 193929 | 46336 | `throughput_cache` | 0 | 8058.30 | 0.004 | 0.471 |
-| `fixed:compact_rss` | 0.588 | 73271 | 38628 | `compact_rss` | 0 | 109.39 | 0.004 | 1.004 |
+| `selector:model` | 0.185 | 172800 | 39456 | `throughput_cache` | 11 | 2625.33 | 0.004 | 0.763 |
+| `fixed:fragmentation_stable` | 0.239 | 210767 | 44908 | `fragmentation_stable` | 0 | 3840.76 | 0.004 | 0.467 |
+| `fixed:balanced` | 0.280 | 210846 | 45396 | `balanced` | 0 | 5688.21 | 0.004 | 0.462 |
+| `fixed:compact_rss` | 0.283 | 84316 | 38596 | `compact_rss` | 0 | 109.39 | 0.004 | 1.004 |
+| `selector:rule` | 0.294 | 203774 | 45624 | `compact_rss` | 7 | 5202.04 | 0.004 | 0.488 |
+| `fixed:large_object` | 0.313 | 80156 | 37192 | `large_object` | 0 | 62.29 | 0.004 | 1.283 |
+| `fixed:deterministic_latency` | 0.321 | 214550 | 46336 | `deterministic_latency` | 0 | 7049.50 | 0.004 | 0.462 |
+| `fixed:cross_thread` | 0.327 | 215017 | 46208 | `cross_thread` | 0 | 7535.67 | 0.004 | 0.467 |
+| `fixed:throughput_cache` | 0.346 | 202044 | 46336 | `throughput_cache` | 0 | 8058.30 | 0.004 | 0.471 |
 
 ## `adaptive_mix:seed20003` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.086 | 182478 | 39372 | `compact_rss` | 5 | 121.54 | 0.005 | 0.482 |
-| `fixed:large_object` | 0.254 | 210819 | 44368 | `large_object` | 0 | 3946.35 | 0.005 | 0.417 |
-| `fixed:fragmentation_stable` | 0.290 | 191173 | 44316 | `fragmentation_stable` | 0 | 3840.76 | 0.005 | 0.460 |
-| `selector:rule` | 0.350 | 187665 | 45736 | `compact_rss` | 12 | 5550.72 | 0.005 | 0.425 |
-| `fixed:balanced` | 0.372 | 196177 | 45696 | `balanced` | 0 | 5590.98 | 0.005 | 0.456 |
-| `fixed:deterministic_latency` | 0.415 | 200876 | 45696 | `deterministic_latency` | 0 | 6903.64 | 0.005 | 0.456 |
-| `fixed:cross_thread` | 0.428 | 199522 | 45568 | `cross_thread` | 0 | 7292.58 | 0.005 | 0.459 |
-| `fixed:throughput_cache` | 0.448 | 213501 | 45696 | `throughput_cache` | 0 | 7839.52 | 0.005 | 0.463 |
-| `fixed:compact_rss` | 0.588 | 73256 | 38240 | `compact_rss` | 0 | 109.39 | 0.005 | 0.994 |
+| `selector:model` | 0.191 | 182060 | 39252 | `throughput_cache` | 15 | 2819.80 | 0.004 | 0.764 |
+| `fixed:large_object` | 0.313 | 82153 | 36888 | `large_object` | 0 | 62.29 | 0.004 | 1.285 |
+| `fixed:fragmentation_stable` | 0.563 | 202203 | 44212 | `fragmentation_stable` | 0 | 3840.76 | 0.005 | 0.460 |
+| `fixed:compact_rss` | 0.600 | 86758 | 38212 | `compact_rss` | 0 | 109.39 | 0.005 | 0.994 |
+| `fixed:balanced` | 0.621 | 213274 | 45696 | `balanced` | 0 | 5590.98 | 0.005 | 0.456 |
+| `selector:rule` | 0.633 | 204042 | 45824 | `compact_rss` | 7 | 5202.04 | 0.005 | 0.481 |
+| `fixed:deterministic_latency` | 0.646 | 214455 | 45824 | `deterministic_latency` | 0 | 6903.64 | 0.005 | 0.456 |
+| `fixed:cross_thread` | 0.649 | 215448 | 45696 | `cross_thread` | 0 | 7292.58 | 0.005 | 0.459 |
+| `fixed:throughput_cache` | 0.656 | 220621 | 45696 | `throughput_cache` | 0 | 7790.91 | 0.005 | 0.463 |
 
 ## `adaptive_mix:seed20004` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.080 | 195272 | 37868 | `compact_rss` | 5 | 121.54 | 0.004 | 0.475 |
-| `fixed:large_object` | 0.250 | 222072 | 42920 | `large_object` | 0 | 3944.83 | 0.004 | 0.408 |
-| `fixed:fragmentation_stable` | 0.289 | 220843 | 43212 | `fragmentation_stable` | 0 | 3840.76 | 0.004 | 0.453 |
-| `selector:rule` | 0.328 | 210020 | 43612 | `compact_rss` | 10 | 5549.20 | 0.004 | 0.413 |
-| `fixed:balanced` | 0.365 | 204892 | 43892 | `balanced` | 0 | 5590.98 | 0.004 | 0.449 |
-| `fixed:deterministic_latency` | 0.411 | 223770 | 44416 | `deterministic_latency` | 0 | 6806.41 | 0.004 | 0.449 |
-| `fixed:cross_thread` | 0.441 | 205809 | 44544 | `cross_thread` | 0 | 7316.89 | 0.004 | 0.453 |
-| `fixed:throughput_cache` | 0.449 | 220271 | 44416 | `throughput_cache` | 0 | 7717.98 | 0.004 | 0.457 |
-| `fixed:compact_rss` | 0.588 | 83169 | 37124 | `compact_rss` | 0 | 109.39 | 0.004 | 0.986 |
+| `selector:model` | 0.197 | 169741 | 38040 | `throughput_cache` | 17 | 2576.71 | 0.004 | 0.745 |
+| `fixed:fragmentation_stable` | 0.237 | 227540 | 43084 | `fragmentation_stable` | 0 | 3840.76 | 0.004 | 0.453 |
+| `fixed:compact_rss` | 0.272 | 86782 | 37100 | `compact_rss` | 0 | 109.39 | 0.004 | 0.986 |
+| `fixed:balanced` | 0.287 | 220789 | 43904 | `balanced` | 0 | 5590.98 | 0.004 | 0.449 |
+| `selector:rule` | 0.304 | 204141 | 44160 | `compact_rss` | 7 | 5202.04 | 0.004 | 0.474 |
+| `fixed:large_object` | 0.313 | 77980 | 35664 | `large_object` | 0 | 62.29 | 0.004 | 1.263 |
+| `fixed:deterministic_latency` | 0.320 | 232391 | 44672 | `deterministic_latency` | 0 | 6757.79 | 0.004 | 0.449 |
+| `fixed:cross_thread` | 0.324 | 236914 | 44544 | `cross_thread` | 0 | 7219.66 | 0.004 | 0.453 |
+| `fixed:throughput_cache` | 0.349 | 211736 | 44800 | `throughput_cache` | 0 | 7717.98 | 0.004 | 0.457 |
 
 ## `adaptive_mix:seed20005` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.083 | 177105 | 38344 | `compact_rss` | 5 | 121.54 | 0.004 | 0.486 |
-| `fixed:large_object` | 0.249 | 203905 | 43392 | `large_object` | 0 | 3944.83 | 0.004 | 0.419 |
-| `fixed:fragmentation_stable` | 0.275 | 204668 | 43232 | `fragmentation_stable` | 0 | 3840.76 | 0.004 | 0.461 |
-| `selector:rule` | 0.306 | 206843 | 43296 | `compact_rss` | 8 | 5549.96 | 0.004 | 0.425 |
-| `fixed:balanced` | 0.353 | 206599 | 44280 | `balanced` | 0 | 5590.98 | 0.004 | 0.458 |
-| `fixed:deterministic_latency` | 0.409 | 201876 | 44928 | `deterministic_latency` | 0 | 6806.41 | 0.004 | 0.458 |
-| `fixed:cross_thread` | 0.433 | 207925 | 45184 | `cross_thread` | 0 | 7353.35 | 0.004 | 0.461 |
-| `fixed:throughput_cache` | 0.447 | 210741 | 45056 | `throughput_cache` | 0 | 7742.29 | 0.004 | 0.466 |
-| `fixed:compact_rss` | 0.588 | 78737 | 37600 | `compact_rss` | 0 | 109.39 | 0.004 | 0.997 |
+| `selector:model` | 0.182 | 196034 | 38756 | `throughput_cache` | 11 | 2673.95 | 0.004 | 0.744 |
+| `fixed:fragmentation_stable` | 0.237 | 212794 | 43416 | `fragmentation_stable` | 0 | 3840.76 | 0.004 | 0.461 |
+| `fixed:compact_rss` | 0.283 | 86989 | 37588 | `compact_rss` | 0 | 109.39 | 0.004 | 0.997 |
+| `fixed:balanced` | 0.284 | 222230 | 44372 | `balanced` | 0 | 5590.98 | 0.004 | 0.458 |
+| `selector:rule` | 0.295 | 228057 | 44640 | `compact_rss` | 7 | 5202.04 | 0.004 | 0.483 |
+| `fixed:large_object` | 0.313 | 83066 | 36344 | `large_object` | 0 | 62.29 | 0.004 | 1.266 |
+| `fixed:deterministic_latency` | 0.324 | 211793 | 44928 | `deterministic_latency` | 0 | 6903.64 | 0.004 | 0.458 |
+| `fixed:cross_thread` | 0.339 | 210429 | 45184 | `cross_thread` | 0 | 7353.35 | 0.004 | 0.461 |
+| `fixed:throughput_cache` | 0.340 | 212325 | 44928 | `throughput_cache` | 0 | 7790.91 | 0.004 | 0.466 |
 
 ## `fragmentation_drift:seed20001` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:large_object` | 0.299 | 129005 | 52676 | `large_object` | 0 | 3640.98 | 0.002 | 8.153 |
-| `selector:rule` | 0.466 | 124256 | 53900 | `large_object` | 3 | 3968.43 | 0.002 | 8.368 |
-| `selector:model` | 0.565 | 117132 | 47824 | `compact_rss` | 1 | 394.63 | 0.002 | 9.185 |
-| `fixed:compact_rss` | 0.588 | 111658 | 47156 | `compact_rss` | 0 | 108.86 | 0.002 | 9.200 |
-| `fixed:fragmentation_stable` | 0.832 | 115258 | 53028 | `fragmentation_stable` | 0 | 3524.47 | 0.002 | 9.143 |
-| `fixed:cross_thread` | 0.919 | 118196 | 55424 | `cross_thread` | 0 | 4721.97 | 0.002 | 9.143 |
-| `fixed:balanced` | 0.927 | 112952 | 54364 | `balanced` | 0 | 4449.81 | 0.002 | 9.143 |
-| `fixed:throughput_cache` | 0.930 | 117181 | 55552 | `throughput_cache` | 0 | 4721.97 | 0.002 | 9.143 |
-| `fixed:deterministic_latency` | 0.935 | 116188 | 55424 | `deterministic_latency` | 0 | 4721.97 | 0.002 | 9.143 |
+| `fixed:large_object` | 0.244 | 122118 | 46776 | `large_object` | 0 | 56.13 | 0.000 | 11.958 |
+| `selector:model` | 0.369 | 121790 | 49444 | `deterministic_latency` | 2 | 2082.02 | 0.000 | 11.732 |
+| `fixed:compact_rss` | 0.501 | 113698 | 47148 | `compact_rss` | 0 | 108.86 | 0.002 | 9.200 |
+| `fixed:balanced` | 0.644 | 132626 | 54204 | `balanced` | 0 | 4449.81 | 0.002 | 9.143 |
+| `selector:rule` | 0.650 | 132935 | 54556 | `balanced` | 0 | 4449.81 | 0.002 | 9.143 |
+| `fixed:throughput_cache` | 0.658 | 136233 | 55424 | `throughput_cache` | 0 | 4721.97 | 0.002 | 9.143 |
+| `fixed:fragmentation_stable` | 0.684 | 119427 | 52936 | `fragmentation_stable` | 0 | 3524.47 | 0.002 | 9.143 |
+| `fixed:cross_thread` | 0.724 | 126303 | 55424 | `cross_thread` | 0 | 4721.97 | 0.002 | 9.143 |
+| `fixed:deterministic_latency` | 0.808 | 115673 | 55424 | `deterministic_latency` | 0 | 4721.97 | 0.002 | 9.143 |
 
 ## `fragmentation_drift:seed20002` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:large_object` | 0.274 | 123909 | 53300 | `large_object` | 0 | 3735.39 | 0.002 | 8.562 |
-| `selector:rule` | 0.472 | 120927 | 53884 | `large_object` | 3 | 4007.55 | 0.002 | 8.942 |
-| `selector:model` | 0.505 | 120927 | 48676 | `compact_rss` | 1 | 367.42 | 0.002 | 9.713 |
-| `fixed:compact_rss` | 0.520 | 116732 | 47900 | `compact_rss` | 0 | 108.86 | 0.002 | 9.725 |
-| `fixed:fragmentation_stable` | 0.727 | 120788 | 54316 | `fragmentation_stable` | 0 | 3619.72 | 0.002 | 9.615 |
-| `fixed:balanced` | 0.873 | 112873 | 54976 | `balanced` | 0 | 4871.65 | 0.002 | 9.615 |
-| `fixed:cross_thread` | 0.888 | 116848 | 56576 | `cross_thread` | 0 | 5361.54 | 0.002 | 9.615 |
-| `fixed:throughput_cache` | 0.892 | 116421 | 56576 | `throughput_cache` | 0 | 5361.54 | 0.002 | 9.615 |
-| `fixed:deterministic_latency` | 0.954 | 109741 | 56448 | `deterministic_latency` | 0 | 5361.54 | 0.002 | 9.615 |
+| `fixed:large_object` | 0.279 | 121958 | 47396 | `large_object` | 0 | 56.13 | 0.000 | 12.415 |
+| `fixed:compact_rss` | 0.407 | 126661 | 47808 | `compact_rss` | 0 | 108.86 | 0.002 | 9.725 |
+| `selector:model` | 0.425 | 119530 | 49792 | `deterministic_latency` | 2 | 2109.24 | 0.000 | 12.275 |
+| `fixed:fragmentation_stable` | 0.608 | 128482 | 54192 | `fragmentation_stable` | 0 | 3619.72 | 0.002 | 9.615 |
+| `selector:rule` | 0.635 | 130812 | 55268 | `balanced` | 0 | 4871.65 | 0.002 | 9.615 |
+| `fixed:balanced` | 0.651 | 129471 | 55264 | `balanced` | 0 | 4871.65 | 0.002 | 9.615 |
+| `fixed:throughput_cache` | 0.655 | 132362 | 56448 | `throughput_cache` | 0 | 5361.54 | 0.002 | 9.615 |
+| `fixed:deterministic_latency` | 0.721 | 127212 | 56576 | `deterministic_latency` | 0 | 5361.54 | 0.002 | 9.615 |
+| `fixed:cross_thread` | 0.789 | 121666 | 56320 | `cross_thread` | 0 | 5361.54 | 0.002 | 9.615 |
 
 ## `fragmentation_drift:seed20003` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:large_object` | 0.286 | 126616 | 53968 | `large_object` | 0 | 3668.20 | 0.002 | 8.611 |
-| `selector:rule` | 0.473 | 121823 | 54656 | `large_object` | 5 | 3940.36 | 0.002 | 8.889 |
-| `fixed:compact_rss` | 0.555 | 114868 | 47972 | `compact_rss` | 0 | 108.86 | 0.002 | 9.636 |
-| `selector:model` | 0.556 | 117115 | 48708 | `compact_rss` | 1 | 394.63 | 0.002 | 9.621 |
-| `fixed:fragmentation_stable` | 0.842 | 111334 | 54264 | `fragmentation_stable` | 0 | 3551.68 | 0.002 | 9.568 |
-| `fixed:balanced` | 0.889 | 115805 | 55828 | `balanced` | 0 | 4749.18 | 0.002 | 9.568 |
-| `fixed:throughput_cache` | 0.896 | 119508 | 56960 | `throughput_cache` | 0 | 5130.21 | 0.002 | 9.568 |
-| `fixed:cross_thread` | 0.904 | 118273 | 56832 | `cross_thread` | 0 | 5130.21 | 0.002 | 9.568 |
-| `fixed:deterministic_latency` | 0.927 | 115989 | 56960 | `deterministic_latency` | 0 | 5130.21 | 0.002 | 9.568 |
+| `fixed:large_object` | 0.210 | 119423 | 47540 | `large_object` | 0 | 56.13 | 0.000 | 12.532 |
+| `selector:model` | 0.361 | 114970 | 49808 | `deterministic_latency` | 2 | 1918.72 | 0.000 | 12.368 |
+| `fixed:compact_rss` | 0.500 | 110052 | 47868 | `compact_rss` | 0 | 108.86 | 0.002 | 9.636 |
+| `fixed:fragmentation_stable` | 0.610 | 120819 | 54352 | `fragmentation_stable` | 0 | 3551.68 | 0.002 | 9.568 |
+| `fixed:balanced` | 0.624 | 126089 | 55860 | `balanced` | 0 | 4749.18 | 0.002 | 9.568 |
+| `fixed:throughput_cache` | 0.662 | 125552 | 56960 | `throughput_cache` | 0 | 5130.21 | 0.002 | 9.568 |
+| `fixed:deterministic_latency` | 0.693 | 122020 | 56832 | `deterministic_latency` | 0 | 5130.21 | 0.002 | 9.568 |
+| `fixed:cross_thread` | 0.703 | 121050 | 56832 | `cross_thread` | 0 | 5130.21 | 0.002 | 9.568 |
+| `selector:rule` | 0.731 | 115823 | 56120 | `balanced` | 0 | 4749.18 | 0.002 | 9.568 |
 
 ## `fragmentation_drift:seed20004` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:large_object` | 0.364 | 116462 | 53104 | `large_object` | 0 | 3680.96 | 0.002 | 8.689 |
-| `selector:rule` | 0.427 | 121186 | 54120 | `large_object` | 3 | 3898.68 | 0.002 | 8.830 |
-| `selector:model` | 0.570 | 115290 | 48352 | `compact_rss` | 1 | 462.67 | 0.002 | 9.587 |
-| `fixed:compact_rss` | 0.588 | 110477 | 47724 | `compact_rss` | 0 | 108.86 | 0.002 | 9.598 |
-| `fixed:fragmentation_stable` | 0.832 | 112412 | 53712 | `fragmentation_stable` | 0 | 3565.29 | 0.002 | 9.538 |
-| `fixed:throughput_cache` | 0.838 | 126386 | 56064 | `throughput_cache` | 0 | 4980.52 | 0.002 | 9.538 |
-| `fixed:deterministic_latency` | 0.841 | 126337 | 56192 | `deterministic_latency` | 0 | 4980.52 | 0.002 | 9.538 |
-| `fixed:balanced` | 0.909 | 113511 | 55296 | `balanced` | 0 | 4653.93 | 0.002 | 9.538 |
-| `fixed:cross_thread` | 0.915 | 116432 | 56064 | `cross_thread` | 0 | 4980.52 | 0.002 | 9.538 |
+| `fixed:large_object` | 0.195 | 125509 | 47272 | `large_object` | 0 | 56.13 | 0.000 | 12.247 |
+| `selector:model` | 0.329 | 122893 | 49480 | `deterministic_latency` | 2 | 1877.90 | 0.000 | 12.108 |
+| `fixed:compact_rss` | 0.492 | 115541 | 47576 | `compact_rss` | 0 | 108.86 | 0.002 | 9.598 |
+| `fixed:fragmentation_stable` | 0.628 | 124268 | 53856 | `fragmentation_stable` | 0 | 3565.29 | 0.002 | 9.538 |
+| `fixed:cross_thread` | 0.658 | 130540 | 56192 | `cross_thread` | 0 | 4980.52 | 0.002 | 9.538 |
+| `fixed:balanced` | 0.664 | 126809 | 55296 | `balanced` | 0 | 4653.93 | 0.002 | 9.538 |
+| `selector:rule` | 0.674 | 126347 | 55512 | `balanced` | 0 | 4653.93 | 0.002 | 9.538 |
+| `fixed:throughput_cache` | 0.691 | 126788 | 56064 | `throughput_cache` | 0 | 4980.52 | 0.002 | 9.538 |
+| `fixed:deterministic_latency` | 0.825 | 114935 | 56192 | `deterministic_latency` | 0 | 4980.52 | 0.002 | 9.538 |
 
 ## `fragmentation_drift:seed20005` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:rule` | 0.354 | 113822 | 53496 | `large_object` | 3 | 3845.95 | 0.002 | 9.047 |
-| `fixed:large_object` | 0.360 | 112514 | 53256 | `large_object` | 0 | 3680.96 | 0.002 | 9.064 |
-| `fixed:compact_rss` | 0.500 | 114765 | 47532 | `compact_rss` | 0 | 108.86 | 0.002 | 10.042 |
-| `selector:model` | 0.556 | 108876 | 48056 | `compact_rss` | 1 | 176.90 | 0.002 | 10.023 |
-| `fixed:balanced` | 0.813 | 116323 | 55192 | `balanced` | 0 | 4599.49 | 0.002 | 9.936 |
-| `fixed:throughput_cache` | 0.819 | 119919 | 56192 | `throughput_cache` | 0 | 4926.09 | 0.002 | 9.936 |
-| `fixed:deterministic_latency` | 0.827 | 119221 | 56320 | `deterministic_latency` | 0 | 4926.09 | 0.002 | 9.936 |
-| `fixed:fragmentation_stable` | 0.830 | 105101 | 53540 | `fragmentation_stable` | 0 | 3565.29 | 0.002 | 9.936 |
-| `fixed:cross_thread` | 0.924 | 107665 | 56192 | `cross_thread` | 0 | 4926.09 | 0.002 | 9.936 |
+| `fixed:large_object` | 0.275 | 98600 | 47264 | `large_object` | 0 | 56.13 | 0.000 | 12.547 |
+| `selector:model` | 0.327 | 102160 | 49628 | `deterministic_latency` | 2 | 1755.43 | 0.000 | 12.355 |
+| `fixed:compact_rss` | 0.465 | 98528 | 47576 | `compact_rss` | 0 | 108.86 | 0.002 | 10.042 |
+| `fixed:fragmentation_stable` | 0.575 | 106572 | 53464 | `fragmentation_stable` | 0 | 3565.29 | 0.002 | 9.936 |
+| `fixed:throughput_cache` | 0.658 | 108099 | 56320 | `throughput_cache` | 0 | 4926.09 | 0.002 | 9.936 |
+| `fixed:balanced` | 0.658 | 105225 | 55132 | `balanced` | 0 | 4599.49 | 0.002 | 9.936 |
+| `fixed:deterministic_latency` | 0.673 | 106848 | 56320 | `deterministic_latency` | 0 | 4926.09 | 0.002 | 9.936 |
+| `fixed:cross_thread` | 0.690 | 105519 | 56320 | `cross_thread` | 0 | 4926.09 | 0.002 | 9.936 |
+| `selector:rule` | 0.796 | 96092 | 55408 | `balanced` | 0 | 4599.49 | 0.002 | 9.936 |
 
 ## `large_burst:seed20001` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:cross_thread` | 0.285 | 339790 | 14080 | `cross_thread` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:deterministic_latency` | 0.285 | 335704 | 14080 | `deterministic_latency` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:fragmentation_stable` | 0.286 | 332029 | 14080 | `fragmentation_stable` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:throughput_cache` | 0.286 | 331345 | 14080 | `throughput_cache` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:balanced` | 0.286 | 319562 | 14080 | `balanced` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:large_object` | 0.296 | 609908 | 14080 | `large_object` | 0 | 856.19 | 0.000 | 0.445 |
-| `selector:rule` | 0.399 | 3136678 | 14208 | `large_object` | 1 | 1143.87 | 0.000 | 0.021 |
-| `selector:model` | 0.538 | 593592 | 14208 | `throughput_cache` | 64 | 1198.66 | 0.000 | 0.480 |
-| `fixed:compact_rss` | 0.588 | 48855 | 14080 | `compact_rss` | 0 | 109.59 | 0.000 | 1.811 |
+| `fixed:cross_thread` | 0.130 | 411957 | 13952 | `cross_thread` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:deterministic_latency` | 0.131 | 397015 | 13952 | `deterministic_latency` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:fragmentation_stable` | 0.134 | 366998 | 13952 | `fragmentation_stable` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:balanced` | 0.136 | 338399 | 13952 | `balanced` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:throughput_cache` | 0.139 | 311662 | 13952 | `throughput_cache` | 0 | 246.58 | 0.000 | 0.940 |
+| `selector:model` | 0.332 | 330944 | 14080 | `large_object` | 1 | 193.50 | 0.000 | 1.001 |
+| `selector:rule` | 0.336 | 300072 | 14080 | `large_object` | 1 | 193.50 | 0.000 | 1.001 |
+| `fixed:compact_rss` | 0.345 | 59085 | 13952 | `compact_rss` | 0 | 109.59 | 0.000 | 1.811 |
+| `fixed:large_object` | 0.521 | 58743 | 14080 | `large_object` | 0 | 56.51 | 0.000 | 1.832 |
 
 ## `large_burst:seed20002` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:throughput_cache` | 0.288 | 333505 | 14592 | `throughput_cache` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:deterministic_latency` | 0.288 | 324700 | 14592 | `deterministic_latency` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:balanced` | 0.292 | 281093 | 14592 | `balanced` | 0 | 246.58 | 0.000 | 0.940 |
-| `selector:rule` | 0.399 | 3903772 | 14720 | `large_object` | 1 | 1143.87 | 0.000 | 0.021 |
-| `fixed:fragmentation_stable` | 0.439 | 332795 | 14720 | `fragmentation_stable` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:cross_thread` | 0.440 | 320549 | 14720 | `cross_thread` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:large_object` | 0.448 | 651866 | 14720 | `large_object` | 0 | 856.19 | 0.000 | 0.445 |
-| `selector:model` | 0.538 | 663375 | 14720 | `throughput_cache` | 64 | 1198.66 | 0.000 | 0.480 |
-| `fixed:compact_rss` | 0.588 | 54395 | 14592 | `compact_rss` | 0 | 109.59 | 0.000 | 1.811 |
+| `selector:model` | 0.123 | 348319 | 14592 | `large_object` | 1 | 193.50 | 0.000 | 1.001 |
+| `selector:rule` | 0.125 | 329314 | 14592 | `large_object` | 1 | 193.50 | 0.000 | 1.001 |
+| `fixed:fragmentation_stable` | 0.130 | 406785 | 14592 | `fragmentation_stable` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:cross_thread` | 0.130 | 402272 | 14592 | `cross_thread` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:balanced` | 0.134 | 359587 | 14592 | `balanced` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:deterministic_latency` | 0.136 | 331649 | 14592 | `deterministic_latency` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:throughput_cache` | 0.145 | 265211 | 14592 | `throughput_cache` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:large_object` | 0.303 | 61167 | 14592 | `large_object` | 0 | 56.51 | 0.000 | 1.832 |
+| `fixed:compact_rss` | 0.346 | 57969 | 14592 | `compact_rss` | 0 | 109.59 | 0.000 | 1.811 |
 
 ## `large_burst:seed20003` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:rule` | 0.248 | 3867786 | 15232 | `large_object` | 1 | 1143.87 | 0.000 | 0.021 |
-| `fixed:cross_thread` | 0.288 | 321892 | 15232 | `cross_thread` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:fragmentation_stable` | 0.288 | 319658 | 15232 | `fragmentation_stable` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:throughput_cache` | 0.288 | 312984 | 15232 | `throughput_cache` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:deterministic_latency` | 0.289 | 306326 | 15232 | `deterministic_latency` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:balanced` | 0.290 | 283208 | 15232 | `balanced` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:large_object` | 0.297 | 603240 | 15232 | `large_object` | 0 | 856.19 | 0.000 | 0.445 |
-| `selector:model` | 0.387 | 675897 | 15232 | `throughput_cache` | 64 | 1198.66 | 0.000 | 0.480 |
-| `fixed:compact_rss` | 0.588 | 51811 | 15232 | `compact_rss` | 0 | 109.59 | 0.000 | 1.811 |
+| `fixed:deterministic_latency` | 0.130 | 408166 | 14976 | `deterministic_latency` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:balanced` | 0.133 | 365183 | 14976 | `balanced` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:throughput_cache` | 0.135 | 344971 | 14976 | `throughput_cache` | 0 | 246.58 | 0.000 | 0.940 |
+| `selector:rule` | 0.329 | 362279 | 15104 | `large_object` | 1 | 193.50 | 0.000 | 1.001 |
+| `selector:model` | 0.336 | 299980 | 15104 | `large_object` | 1 | 193.50 | 0.000 | 1.001 |
+| `fixed:cross_thread` | 0.338 | 400469 | 15104 | `cross_thread` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:fragmentation_stable` | 0.342 | 349266 | 15104 | `fragmentation_stable` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:compact_rss` | 0.343 | 58164 | 14976 | `compact_rss` | 0 | 109.59 | 0.000 | 1.811 |
+| `fixed:large_object` | 0.521 | 57249 | 15104 | `large_object` | 0 | 56.51 | 0.000 | 1.832 |
 
 ## `large_burst:seed20004` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:fragmentation_stable` | 0.287 | 320238 | 15616 | `fragmentation_stable` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:cross_thread` | 0.287 | 311891 | 15616 | `cross_thread` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:throughput_cache` | 0.288 | 304414 | 15616 | `throughput_cache` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:balanced` | 0.288 | 298313 | 15616 | `balanced` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:deterministic_latency` | 0.290 | 271165 | 15616 | `deterministic_latency` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:large_object` | 0.295 | 676079 | 15616 | `large_object` | 0 | 856.19 | 0.000 | 0.445 |
-| `selector:rule` | 0.399 | 3571872 | 15744 | `large_object` | 1 | 1143.87 | 0.000 | 0.021 |
-| `selector:model` | 0.537 | 669020 | 15744 | `throughput_cache` | 64 | 1198.66 | 0.000 | 0.480 |
-| `fixed:compact_rss` | 0.588 | 49087 | 15616 | `compact_rss` | 0 | 109.59 | 0.000 | 1.811 |
+| `fixed:fragmentation_stable` | 0.130 | 386852 | 15488 | `fragmentation_stable` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:throughput_cache` | 0.131 | 373802 | 15488 | `throughput_cache` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:cross_thread` | 0.131 | 372083 | 15488 | `cross_thread` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:balanced` | 0.132 | 366979 | 15488 | `balanced` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:deterministic_latency` | 0.135 | 328391 | 15488 | `deterministic_latency` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:large_object` | 0.302 | 58007 | 15488 | `large_object` | 0 | 56.51 | 0.000 | 1.832 |
+| `selector:rule` | 0.327 | 365550 | 15616 | `large_object` | 1 | 193.50 | 0.000 | 1.001 |
+| `selector:model` | 0.331 | 319807 | 15616 | `large_object` | 1 | 193.50 | 0.000 | 1.001 |
+| `fixed:compact_rss` | 0.346 | 54733 | 15488 | `compact_rss` | 0 | 109.59 | 0.000 | 1.811 |
 
 ## `large_burst:seed20005` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:cross_thread` | 0.288 | 341788 | 16128 | `cross_thread` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:deterministic_latency` | 0.288 | 332448 | 16128 | `deterministic_latency` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:throughput_cache` | 0.288 | 330825 | 16128 | `throughput_cache` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:fragmentation_stable` | 0.289 | 319434 | 16128 | `fragmentation_stable` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:balanced` | 0.289 | 318950 | 16128 | `balanced` | 0 | 246.58 | 0.000 | 0.940 |
-| `fixed:large_object` | 0.298 | 582696 | 16128 | `large_object` | 0 | 856.19 | 0.000 | 0.445 |
-| `selector:rule` | 0.399 | 3638688 | 16256 | `large_object` | 1 | 1143.87 | 0.000 | 0.021 |
-| `selector:model` | 0.540 | 597848 | 16256 | `throughput_cache` | 64 | 1198.66 | 0.000 | 0.480 |
-| `fixed:compact_rss` | 0.588 | 55840 | 16128 | `compact_rss` | 0 | 109.59 | 0.000 | 1.811 |
+| `selector:model` | 0.118 | 308080 | 16000 | `large_object` | 1 | 193.50 | 0.000 | 1.001 |
+| `selector:rule` | 0.124 | 261140 | 16000 | `large_object` | 1 | 193.50 | 0.000 | 1.001 |
+| `fixed:cross_thread` | 0.130 | 308350 | 16000 | `cross_thread` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:fragmentation_stable` | 0.130 | 306076 | 16000 | `fragmentation_stable` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:throughput_cache` | 0.130 | 305528 | 16000 | `throughput_cache` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:deterministic_latency` | 0.130 | 305471 | 16000 | `deterministic_latency` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:balanced` | 0.131 | 302303 | 16000 | `balanced` | 0 | 246.58 | 0.000 | 0.940 |
+| `fixed:large_object` | 0.313 | 48954 | 16000 | `large_object` | 0 | 56.51 | 0.000 | 1.832 |
+| `fixed:compact_rss` | 0.343 | 49819 | 16000 | `compact_rss` | 0 | 109.59 | 0.000 | 1.811 |
 
 ## `latency_loop:seed20001` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:compact_rss` | 0.004 | 7559079 | 14336 | `compact_rss` | 0 | 110.33 | 0.000 | 0.001 |
-| `fixed:throughput_cache` | 0.261 | 7788447 | 14336 | `throughput_cache` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:cross_thread` | 0.275 | 7118607 | 14336 | `cross_thread` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:large_object` | 0.275 | 7095837 | 14336 | `large_object` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:deterministic_latency` | 0.276 | 7047410 | 14336 | `deterministic_latency` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:fragmentation_stable` | 0.279 | 6924727 | 14336 | `fragmentation_stable` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:balanced` | 0.283 | 6756696 | 14336 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
-| `selector:model` | 0.358 | 4687446 | 14336 | `large_object` | 1 | 124.12 | 0.000 | 0.001 |
-| `selector:rule` | 0.390 | 4136561 | 14336 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:compact_rss` | 0.116 | 8012429 | 14208 | `compact_rss` | 0 | 110.33 | 0.000 | 0.001 |
+| `fixed:balanced` | 0.155 | 7647128 | 14208 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:deterministic_latency` | 0.173 | 7190325 | 14208 | `deterministic_latency` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:throughput_cache` | 0.195 | 6701274 | 14208 | `throughput_cache` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:large_object` | 0.212 | 8251188 | 14336 | `large_object` | 0 | 56.89 | 0.000 | 0.001 |
+| `fixed:cross_thread` | 0.338 | 8400411 | 14336 | `cross_thread` | 0 | 124.12 | 0.000 | 0.001 |
+| `selector:rule` | 0.444 | 5918970 | 14336 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:fragmentation_stable` | 0.458 | 5706441 | 14336 | `fragmentation_stable` | 0 | 124.12 | 0.000 | 0.001 |
+| `selector:model` | 0.505 | 5067875 | 14336 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
 
 ## `latency_loop:seed20002` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:compact_rss` | 0.156 | 7524159 | 14976 | `compact_rss` | 0 | 110.33 | 0.000 | 0.001 |
-| `fixed:throughput_cache` | 0.271 | 7266429 | 14848 | `throughput_cache` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:balanced` | 0.280 | 6890423 | 14848 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:fragmentation_stable` | 0.412 | 7750134 | 14976 | `fragmentation_stable` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:cross_thread` | 0.412 | 7731049 | 14976 | `cross_thread` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:deterministic_latency` | 0.416 | 7572208 | 14976 | `deterministic_latency` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:large_object` | 0.426 | 7074982 | 14976 | `large_object` | 0 | 124.12 | 0.000 | 0.001 |
-| `selector:model` | 0.458 | 5939830 | 14976 | `large_object` | 1 | 124.12 | 0.000 | 0.001 |
-| `selector:rule` | 0.541 | 4189600 | 14976 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:large_object` | 0.006 | 8232551 | 14720 | `large_object` | 0 | 56.89 | 0.000 | 0.001 |
+| `fixed:compact_rss` | 0.104 | 8469199 | 14720 | `compact_rss` | 0 | 110.33 | 0.000 | 0.001 |
+| `fixed:throughput_cache` | 0.130 | 8475449 | 14720 | `throughput_cache` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:cross_thread` | 0.131 | 8435734 | 14720 | `cross_thread` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:deterministic_latency` | 0.140 | 8037711 | 14720 | `deterministic_latency` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:fragmentation_stable` | 0.180 | 6727535 | 14720 | `fragmentation_stable` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:balanced` | 0.198 | 6243402 | 14720 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `selector:model` | 0.211 | 5953551 | 14720 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `selector:rule` | 0.298 | 4510689 | 14720 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
 
 ## `latency_loop:seed20003` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:compact_rss` | 0.020 | 7377860 | 15488 | `compact_rss` | 0 | 110.33 | 0.000 | 0.001 |
-| `fixed:throughput_cache` | 0.261 | 8020209 | 15488 | `throughput_cache` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:deterministic_latency` | 0.265 | 7889559 | 15488 | `deterministic_latency` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:fragmentation_stable` | 0.270 | 7730501 | 15488 | `fragmentation_stable` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:large_object` | 0.285 | 7260867 | 15488 | `large_object` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:cross_thread` | 0.287 | 7215245 | 15488 | `cross_thread` | 0 | 124.12 | 0.000 | 0.001 |
-| `selector:model` | 0.343 | 5932723 | 15488 | `large_object` | 1 | 124.12 | 0.000 | 0.001 |
-| `fixed:balanced` | 0.374 | 5407098 | 15488 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
-| `selector:rule` | 0.390 | 5165411 | 15488 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:large_object` | 0.008 | 7533943 | 15232 | `large_object` | 0 | 56.89 | 0.000 | 0.001 |
+| `fixed:compact_rss` | 0.118 | 7332652 | 15232 | `compact_rss` | 0 | 110.33 | 0.000 | 0.001 |
+| `fixed:throughput_cache` | 0.130 | 7809265 | 15232 | `throughput_cache` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:fragmentation_stable` | 0.139 | 7513672 | 15232 | `fragmentation_stable` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:deterministic_latency` | 0.162 | 6858693 | 15232 | `deterministic_latency` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:cross_thread` | 0.169 | 6678363 | 15232 | `cross_thread` | 0 | 124.12 | 0.000 | 0.001 |
+| `selector:model` | 0.222 | 5580605 | 15232 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:balanced` | 0.237 | 5333924 | 15232 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `selector:rule` | 0.298 | 4514856 | 15232 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
 
 ## `latency_loop:seed20004` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:compact_rss` | 0.017 | 7462652 | 15872 | `compact_rss` | 0 | 110.33 | 0.000 | 0.001 |
-| `fixed:throughput_cache` | 0.261 | 7959643 | 15872 | `throughput_cache` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:cross_thread` | 0.269 | 7708923 | 15872 | `cross_thread` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:large_object` | 0.270 | 7700080 | 15872 | `large_object` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:fragmentation_stable` | 0.273 | 7594215 | 15872 | `fragmentation_stable` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:balanced` | 0.296 | 7003108 | 15872 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:deterministic_latency` | 0.299 | 6934882 | 15872 | `deterministic_latency` | 0 | 124.12 | 0.000 | 0.001 |
-| `selector:model` | 0.345 | 6004316 | 15872 | `large_object` | 1 | 124.12 | 0.000 | 0.001 |
-| `selector:rule` | 0.390 | 5307913 | 15872 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:compact_rss` | 0.120 | 7944176 | 15744 | `compact_rss` | 0 | 110.33 | 0.000 | 0.001 |
+| `fixed:throughput_cache` | 0.130 | 8253426 | 15744 | `throughput_cache` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:fragmentation_stable` | 0.136 | 8150281 | 15744 | `fragmentation_stable` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:cross_thread` | 0.136 | 8137195 | 15744 | `cross_thread` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:large_object` | 0.155 | 6036539 | 15744 | `large_object` | 0 | 56.89 | 0.000 | 0.001 |
+| `fixed:balanced` | 0.174 | 7471346 | 15744 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:deterministic_latency` | 0.213 | 6899878 | 15744 | `deterministic_latency` | 0 | 124.12 | 0.000 | 0.001 |
+| `selector:model` | 0.288 | 6014615 | 15744 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `selector:rule` | 0.298 | 5912740 | 15744 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
 
 ## `latency_loop:seed20005` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:compact_rss` | 0.119 | 5169427 | 16512 | `compact_rss` | 0 | 110.33 | 0.000 | 0.001 |
-| `fixed:deterministic_latency` | 0.261 | 7752688 | 16512 | `deterministic_latency` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:large_object` | 0.284 | 7063394 | 16512 | `large_object` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:fragmentation_stable` | 0.287 | 6988607 | 16512 | `fragmentation_stable` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:balanced` | 0.320 | 6206553 | 16512 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
-| `fixed:cross_thread` | 0.330 | 6011060 | 16512 | `cross_thread` | 0 | 124.12 | 0.000 | 0.001 |
-| `selector:model` | 0.365 | 5387641 | 16512 | `large_object` | 1 | 124.12 | 0.000 | 0.001 |
-| `fixed:throughput_cache` | 0.378 | 5198315 | 16512 | `throughput_cache` | 0 | 124.12 | 0.000 | 0.001 |
-| `selector:rule` | 0.390 | 5023232 | 16512 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:large_object` | 0.054 | 5648446 | 16256 | `large_object` | 0 | 56.89 | 0.000 | 0.001 |
+| `fixed:deterministic_latency` | 0.130 | 6613172 | 16256 | `deterministic_latency` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:throughput_cache` | 0.156 | 6103428 | 16256 | `throughput_cache` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:cross_thread` | 0.162 | 6007867 | 16256 | `cross_thread` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:compact_rss` | 0.204 | 5002751 | 16256 | `compact_rss` | 0 | 110.33 | 0.000 | 0.001 |
+| `fixed:balanced` | 0.216 | 5196303 | 16256 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `fixed:fragmentation_stable` | 0.274 | 4533535 | 16256 | `fragmentation_stable` | 0 | 124.12 | 0.000 | 0.001 |
+| `selector:model` | 0.278 | 4490692 | 16256 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
+| `selector:rule` | 0.298 | 4308594 | 16256 | `balanced` | 0 | 124.12 | 0.000 | 0.001 |
 
 ## `remote_queue:seed20001` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.034 | 511652 | 46464 | `compact_rss` | 3 | 194.47 | 0.185 | 0.022 |
-| `fixed:large_object` | 0.047 | 569697 | 46208 | `large_object` | 0 | 972.34 | 0.185 | 0.022 |
-| `fixed:fragmentation_stable` | 0.056 | 544516 | 46336 | `fragmentation_stable` | 0 | 972.34 | 0.185 | 0.022 |
-| `fixed:balanced` | 0.068 | 516448 | 46336 | `balanced` | 0 | 1215.43 | 0.185 | 0.022 |
-| `selector:rule` | 0.072 | 552750 | 46464 | `balanced` | 0 | 1215.43 | 0.185 | 0.022 |
-| `fixed:deterministic_latency` | 0.112 | 592707 | 46464 | `deterministic_latency` | 0 | 2224.24 | 0.185 | 0.023 |
-| `fixed:cross_thread` | 0.207 | 592229 | 47872 | `cross_thread` | 0 | 2661.79 | 0.185 | 0.024 |
-| `fixed:throughput_cache` | 0.419 | 631188 | 48896 | `throughput_cache` | 0 | 6466.09 | 0.185 | 0.026 |
-| `fixed:compact_rss` | 0.588 | 149885 | 46080 | `compact_rss` | 0 | 109.39 | 0.185 | 0.272 |
+| `fixed:large_object` | 0.294 | 168125 | 46208 | `large_object` | 0 | 62.29 | 0.184 | 0.273 |
+| `fixed:balanced` | 0.352 | 657754 | 46208 | `balanced` | 0 | 1215.43 | 0.185 | 0.022 |
+| `fixed:fragmentation_stable` | 0.368 | 552788 | 46336 | `fragmentation_stable` | 0 | 972.34 | 0.185 | 0.022 |
+| `selector:rule` | 0.379 | 626324 | 46464 | `balanced` | 0 | 1215.43 | 0.185 | 0.022 |
+| `fixed:deterministic_latency` | 0.395 | 681011 | 46464 | `deterministic_latency` | 0 | 2212.08 | 0.185 | 0.022 |
+| `selector:model` | 0.459 | 626741 | 47104 | `deterministic_latency` | 34 | 1422.05 | 0.185 | 0.023 |
+| `fixed:cross_thread` | 0.523 | 593868 | 47616 | `cross_thread` | 0 | 2710.41 | 0.185 | 0.024 |
+| `fixed:compact_rss` | 0.646 | 152208 | 46336 | `compact_rss` | 0 | 109.39 | 0.185 | 0.272 |
+| `fixed:throughput_cache` | 0.659 | 800515 | 48384 | `throughput_cache` | 0 | 6466.09 | 0.185 | 0.025 |
 
 ## `remote_queue:seed20002` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.042 | 511331 | 46208 | `compact_rss` | 3 | 194.47 | 0.185 | 0.022 |
-| `fixed:balanced` | 0.050 | 614331 | 45824 | `balanced` | 0 | 1239.74 | 0.185 | 0.022 |
-| `fixed:fragmentation_stable` | 0.050 | 585179 | 45952 | `fragmentation_stable` | 0 | 972.34 | 0.185 | 0.022 |
-| `fixed:large_object` | 0.051 | 571894 | 45952 | `large_object` | 0 | 972.34 | 0.185 | 0.022 |
-| `selector:rule` | 0.070 | 584368 | 46080 | `balanced` | 0 | 1239.74 | 0.185 | 0.022 |
-| `fixed:deterministic_latency` | 0.100 | 617633 | 45952 | `deterministic_latency` | 0 | 2236.39 | 0.185 | 0.022 |
-| `fixed:cross_thread` | 0.230 | 654501 | 47488 | `cross_thread` | 0 | 2771.18 | 0.185 | 0.024 |
-| `fixed:throughput_cache` | 0.417 | 672644 | 48000 | `throughput_cache` | 0 | 6466.09 | 0.185 | 0.025 |
-| `fixed:compact_rss` | 0.588 | 154028 | 45824 | `compact_rss` | 0 | 109.39 | 0.185 | 0.272 |
+| `fixed:fragmentation_stable` | 0.035 | 578858 | 45568 | `fragmentation_stable` | 0 | 972.34 | 0.185 | 0.022 |
+| `fixed:balanced` | 0.066 | 656848 | 45952 | `balanced` | 0 | 1239.74 | 0.185 | 0.022 |
+| `selector:rule` | 0.071 | 606650 | 45952 | `balanced` | 0 | 1239.74 | 0.185 | 0.022 |
+| `fixed:deterministic_latency` | 0.086 | 690399 | 45952 | `deterministic_latency` | 0 | 2297.16 | 0.185 | 0.023 |
+| `selector:model` | 0.151 | 638232 | 46720 | `deterministic_latency` | 34 | 1373.44 | 0.185 | 0.023 |
+| `fixed:cross_thread` | 0.215 | 688002 | 47360 | `cross_thread` | 0 | 2722.56 | 0.185 | 0.024 |
+| `fixed:compact_rss` | 0.327 | 178097 | 45824 | `compact_rss` | 0 | 109.39 | 0.185 | 0.272 |
+| `fixed:throughput_cache` | 0.339 | 786158 | 48000 | `throughput_cache` | 0 | 6417.47 | 0.185 | 0.025 |
+| `fixed:large_object` | 0.346 | 171013 | 45952 | `large_object` | 0 | 62.29 | 0.185 | 0.273 |
 
 ## `remote_queue:seed20003` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.043 | 529190 | 46592 | `compact_rss` | 3 | 194.47 | 0.185 | 0.022 |
-| `fixed:large_object` | 0.051 | 599616 | 46336 | `large_object` | 0 | 972.34 | 0.185 | 0.022 |
-| `fixed:balanced` | 0.055 | 556869 | 46208 | `balanced` | 0 | 1215.43 | 0.185 | 0.022 |
-| `fixed:fragmentation_stable` | 0.056 | 536510 | 46336 | `fragmentation_stable` | 0 | 972.34 | 0.185 | 0.022 |
-| `selector:rule` | 0.075 | 529063 | 46464 | `balanced` | 0 | 1215.43 | 0.185 | 0.022 |
-| `fixed:deterministic_latency` | 0.123 | 586594 | 46592 | `deterministic_latency` | 0 | 2224.24 | 0.185 | 0.023 |
-| `fixed:cross_thread` | 0.227 | 592248 | 47744 | `cross_thread` | 0 | 2795.49 | 0.185 | 0.024 |
-| `fixed:throughput_cache` | 0.419 | 728941 | 48384 | `throughput_cache` | 0 | 6526.86 | 0.185 | 0.026 |
-| `fixed:compact_rss` | 0.597 | 149333 | 46336 | `compact_rss` | 0 | 109.39 | 0.185 | 0.272 |
+| `fixed:balanced` | 0.027 | 660086 | 46208 | `balanced` | 0 | 1215.43 | 0.185 | 0.022 |
+| `fixed:fragmentation_stable` | 0.028 | 603842 | 46208 | `fragmentation_stable` | 0 | 972.34 | 0.185 | 0.022 |
+| `fixed:deterministic_latency` | 0.054 | 614457 | 46208 | `deterministic_latency` | 0 | 2272.86 | 0.185 | 0.023 |
+| `selector:model` | 0.093 | 678947 | 46720 | `deterministic_latency` | 42 | 1373.44 | 0.185 | 0.023 |
+| `selector:rule` | 0.133 | 638798 | 47232 | `balanced` | 2 | 1470.67 | 0.185 | 0.023 |
+| `fixed:cross_thread` | 0.203 | 689840 | 47744 | `cross_thread` | 0 | 2746.87 | 0.185 | 0.024 |
+| `fixed:large_object` | 0.306 | 179513 | 46208 | `large_object` | 0 | 62.29 | 0.185 | 0.273 |
+| `fixed:compact_rss` | 0.314 | 173344 | 46208 | `compact_rss` | 0 | 109.39 | 0.185 | 0.272 |
+| `fixed:throughput_cache` | 0.340 | 712187 | 48384 | `throughput_cache` | 0 | 6526.86 | 0.185 | 0.026 |
 
 ## `remote_queue:seed20004` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.027 | 502976 | 46080 | `compact_rss` | 3 | 194.47 | 0.185 | 0.022 |
-| `fixed:fragmentation_stable` | 0.049 | 523939 | 45952 | `fragmentation_stable` | 0 | 972.34 | 0.185 | 0.022 |
-| `fixed:large_object` | 0.051 | 596145 | 46080 | `large_object` | 0 | 972.34 | 0.185 | 0.022 |
-| `fixed:balanced` | 0.052 | 602700 | 45952 | `balanced` | 0 | 1215.43 | 0.185 | 0.022 |
-| `selector:rule` | 0.069 | 594404 | 46208 | `balanced` | 0 | 1215.43 | 0.185 | 0.022 |
-| `fixed:deterministic_latency` | 0.110 | 629952 | 46208 | `deterministic_latency` | 0 | 2272.86 | 0.185 | 0.022 |
-| `fixed:cross_thread` | 0.223 | 623263 | 47616 | `cross_thread` | 0 | 2807.64 | 0.185 | 0.024 |
-| `fixed:throughput_cache` | 0.419 | 739324 | 48384 | `throughput_cache` | 0 | 6526.86 | 0.185 | 0.026 |
-| `fixed:compact_rss` | 0.588 | 149286 | 45952 | `compact_rss` | 0 | 109.39 | 0.185 | 0.272 |
+| `fixed:fragmentation_stable` | 0.048 | 537874 | 45952 | `fragmentation_stable` | 0 | 972.34 | 0.185 | 0.022 |
+| `fixed:balanced` | 0.049 | 572919 | 45952 | `balanced` | 0 | 1215.43 | 0.185 | 0.022 |
+| `selector:rule` | 0.067 | 612109 | 46208 | `balanced` | 0 | 1215.43 | 0.185 | 0.022 |
+| `fixed:deterministic_latency` | 0.085 | 643377 | 46208 | `deterministic_latency` | 0 | 2224.24 | 0.185 | 0.022 |
+| `selector:model` | 0.109 | 651755 | 46464 | `deterministic_latency` | 32 | 1604.37 | 0.185 | 0.023 |
+| `fixed:cross_thread` | 0.247 | 568522 | 47872 | `cross_thread` | 0 | 2807.64 | 0.185 | 0.025 |
+| `fixed:compact_rss` | 0.298 | 169322 | 45824 | `compact_rss` | 0 | 109.39 | 0.185 | 0.272 |
+| `fixed:large_object` | 0.335 | 157384 | 46080 | `large_object` | 0 | 62.29 | 0.185 | 0.274 |
+| `fixed:throughput_cache` | 0.339 | 773383 | 48256 | `throughput_cache` | 0 | 6526.86 | 0.185 | 0.025 |
 
 ## `remote_queue:seed20005` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.032 | 495853 | 46592 | `compact_rss` | 3 | 194.47 | 0.185 | 0.022 |
-| `fixed:large_object` | 0.041 | 609770 | 46336 | `large_object` | 0 | 972.34 | 0.185 | 0.022 |
-| `fixed:balanced` | 0.052 | 578859 | 46336 | `balanced` | 0 | 1191.12 | 0.185 | 0.022 |
-| `fixed:fragmentation_stable` | 0.057 | 566974 | 46592 | `fragmentation_stable` | 0 | 972.34 | 0.185 | 0.022 |
-| `selector:rule` | 0.068 | 550580 | 46592 | `balanced` | 0 | 1191.12 | 0.185 | 0.022 |
-| `fixed:deterministic_latency` | 0.102 | 667555 | 46592 | `deterministic_latency` | 0 | 2224.24 | 0.185 | 0.022 |
-| `fixed:cross_thread` | 0.228 | 622356 | 48512 | `cross_thread` | 0 | 2746.87 | 0.185 | 0.024 |
-| `fixed:throughput_cache` | 0.419 | 699747 | 49280 | `throughput_cache` | 0 | 6478.24 | 0.185 | 0.026 |
-| `fixed:compact_rss` | 0.588 | 156223 | 46336 | `compact_rss` | 0 | 109.39 | 0.185 | 0.272 |
+| `fixed:balanced` | 0.041 | 563484 | 46336 | `balanced` | 0 | 1191.12 | 0.185 | 0.022 |
+| `fixed:fragmentation_stable` | 0.047 | 469687 | 46336 | `fragmentation_stable` | 0 | 972.34 | 0.185 | 0.022 |
+| `selector:rule` | 0.064 | 501894 | 46592 | `balanced` | 0 | 1191.12 | 0.185 | 0.022 |
+| `fixed:deterministic_latency` | 0.093 | 575166 | 46848 | `deterministic_latency` | 0 | 2175.62 | 0.185 | 0.022 |
+| `selector:model` | 0.126 | 446086 | 47104 | `deterministic_latency` | 48 | 1494.98 | 0.185 | 0.023 |
+| `fixed:cross_thread` | 0.215 | 425913 | 48256 | `cross_thread` | 0 | 2746.87 | 0.185 | 0.024 |
+| `fixed:compact_rss` | 0.306 | 148030 | 46208 | `compact_rss` | 0 | 109.39 | 0.185 | 0.272 |
+| `fixed:large_object` | 0.330 | 142488 | 46464 | `large_object` | 0 | 62.29 | 0.185 | 0.273 |
+| `fixed:throughput_cache` | 0.340 | 684740 | 49408 | `throughput_cache` | 0 | 6478.24 | 0.185 | 0.026 |
 
 ## `rss_peak_release:seed20001` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.009 | 1099457 | 14208 | `fragmentation_stable` | 3 | 190.51 | 0.000 | 0.055 |
-| `fixed:large_object` | 0.170 | 1690768 | 14208 | `large_object` | 0 | 3578.90 | 0.000 | 0.048 |
-| `fixed:fragmentation_stable` | 0.170 | 1605278 | 14208 | `fragmentation_stable` | 0 | 3578.90 | 0.000 | 0.048 |
-| `fixed:balanced` | 0.258 | 1550175 | 14208 | `balanced` | 0 | 5375.15 | 0.000 | 0.048 |
-| `fixed:throughput_cache` | 0.261 | 1654948 | 14208 | `throughput_cache` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:deterministic_latency` | 0.261 | 1589368 | 14208 | `deterministic_latency` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:cross_thread` | 0.261 | 1547278 | 14208 | `cross_thread` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:compact_rss` | 0.588 | 48884 | 14208 | `compact_rss` | 0 | 108.86 | 0.000 | 1.150 |
-| `selector:rule` | 0.839 | 49104 | 14208 | `compact_rss` | 3 | 5307.11 | 0.000 | 1.143 |
+| `fixed:fragmentation_stable` | 0.086 | 1711185 | 14080 | `fragmentation_stable` | 0 | 3578.90 | 0.000 | 0.048 |
+| `selector:model` | 0.117 | 898388 | 14080 | `throughput_cache` | 3 | 2912.11 | 0.000 | 0.318 |
+| `fixed:balanced` | 0.129 | 1869688 | 14080 | `balanced` | 0 | 5375.15 | 0.000 | 0.048 |
+| `fixed:throughput_cache` | 0.130 | 2000595 | 14080 | `throughput_cache` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:deterministic_latency` | 0.130 | 1890309 | 14080 | `deterministic_latency` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:cross_thread` | 0.130 | 1845608 | 14080 | `cross_thread` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:compact_rss` | 0.279 | 52659 | 14080 | `compact_rss` | 0 | 108.86 | 0.000 | 1.150 |
+| `fixed:large_object` | 0.313 | 50970 | 14080 | `large_object` | 0 | 56.13 | 0.000 | 1.433 |
+| `selector:rule` | 0.419 | 52817 | 14080 | `compact_rss` | 3 | 5307.11 | 0.000 | 1.143 |
 
 ## `rss_peak_release:seed20002` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.009 | 1172297 | 14720 | `fragmentation_stable` | 3 | 190.51 | 0.000 | 0.055 |
-| `fixed:large_object` | 0.171 | 1783141 | 14720 | `large_object` | 0 | 3578.90 | 0.000 | 0.048 |
-| `fixed:fragmentation_stable` | 0.172 | 1361731 | 14720 | `fragmentation_stable` | 0 | 3578.90 | 0.000 | 0.048 |
-| `fixed:balanced` | 0.258 | 1951195 | 14720 | `balanced` | 0 | 5375.15 | 0.000 | 0.048 |
-| `fixed:deterministic_latency` | 0.261 | 2055147 | 14720 | `deterministic_latency` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:throughput_cache` | 0.261 | 2018405 | 14720 | `throughput_cache` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:cross_thread` | 0.261 | 1914799 | 14720 | `cross_thread` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:compact_rss` | 0.584 | 50690 | 14720 | `compact_rss` | 0 | 108.86 | 0.000 | 1.150 |
-| `selector:rule` | 0.840 | 49086 | 14720 | `compact_rss` | 3 | 5307.11 | 0.000 | 1.143 |
+| `fixed:fragmentation_stable` | 0.085 | 1915960 | 14592 | `fragmentation_stable` | 0 | 3578.90 | 0.000 | 0.048 |
+| `fixed:balanced` | 0.129 | 1720015 | 14592 | `balanced` | 0 | 5375.15 | 0.000 | 0.048 |
+| `fixed:deterministic_latency` | 0.130 | 1921452 | 14592 | `deterministic_latency` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:throughput_cache` | 0.130 | 1919605 | 14592 | `throughput_cache` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:compact_rss` | 0.285 | 53167 | 14592 | `compact_rss` | 0 | 108.86 | 0.000 | 1.150 |
+| `selector:model` | 0.324 | 949232 | 14720 | `throughput_cache` | 3 | 2912.11 | 0.000 | 0.318 |
+| `fixed:cross_thread` | 0.338 | 1890079 | 14720 | `cross_thread` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:large_object` | 0.515 | 55190 | 14720 | `large_object` | 0 | 56.13 | 0.000 | 1.433 |
+| `selector:rule` | 0.632 | 53278 | 14720 | `compact_rss` | 3 | 5307.11 | 0.000 | 1.143 |
 
 ## `rss_peak_release:seed20003` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.160 | 1103455 | 15360 | `fragmentation_stable` | 3 | 190.51 | 0.000 | 0.055 |
-| `fixed:balanced` | 0.259 | 1716870 | 15232 | `balanced` | 0 | 5375.15 | 0.000 | 0.048 |
-| `fixed:throughput_cache` | 0.261 | 1949765 | 15232 | `throughput_cache` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:deterministic_latency` | 0.262 | 1360865 | 15232 | `deterministic_latency` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:fragmentation_stable` | 0.322 | 1762643 | 15360 | `fragmentation_stable` | 0 | 3578.90 | 0.000 | 0.048 |
-| `fixed:large_object` | 0.322 | 1617968 | 15360 | `large_object` | 0 | 3578.90 | 0.000 | 0.048 |
-| `fixed:cross_thread` | 0.412 | 1797302 | 15360 | `cross_thread` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:compact_rss` | 0.739 | 46411 | 15360 | `compact_rss` | 0 | 108.86 | 0.000 | 1.150 |
-| `selector:rule` | 0.982 | 49668 | 15360 | `compact_rss` | 3 | 5307.11 | 0.000 | 1.143 |
+| `fixed:fragmentation_stable` | 0.085 | 1880431 | 15104 | `fragmentation_stable` | 0 | 3578.90 | 0.000 | 0.048 |
+| `selector:model` | 0.116 | 983132 | 15104 | `throughput_cache` | 3 | 2912.11 | 0.000 | 0.318 |
+| `fixed:balanced` | 0.130 | 1490206 | 15104 | `balanced` | 0 | 5375.15 | 0.000 | 0.048 |
+| `fixed:throughput_cache` | 0.130 | 1928968 | 15104 | `throughput_cache` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:deterministic_latency` | 0.131 | 1743380 | 15104 | `deterministic_latency` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:cross_thread` | 0.131 | 1553801 | 15104 | `cross_thread` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:compact_rss` | 0.278 | 51423 | 15104 | `compact_rss` | 0 | 108.86 | 0.000 | 1.150 |
+| `fixed:large_object` | 0.299 | 54059 | 15104 | `large_object` | 0 | 56.13 | 0.000 | 1.433 |
+| `selector:rule` | 0.425 | 49470 | 15104 | `compact_rss` | 3 | 5307.11 | 0.000 | 1.143 |
 
 ## `rss_peak_release:seed20004` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.010 | 1038610 | 15744 | `fragmentation_stable` | 3 | 190.51 | 0.000 | 0.055 |
-| `fixed:large_object` | 0.170 | 1786863 | 15744 | `large_object` | 0 | 3578.90 | 0.000 | 0.048 |
-| `fixed:fragmentation_stable` | 0.171 | 1647647 | 15744 | `fragmentation_stable` | 0 | 3578.90 | 0.000 | 0.048 |
-| `fixed:balanced` | 0.258 | 1801248 | 15744 | `balanced` | 0 | 5375.15 | 0.000 | 0.048 |
-| `fixed:cross_thread` | 0.261 | 1844654 | 15744 | `cross_thread` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:throughput_cache` | 0.261 | 1722579 | 15744 | `throughput_cache` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:deterministic_latency` | 0.261 | 1562548 | 15744 | `deterministic_latency` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:compact_rss` | 0.588 | 47569 | 15744 | `compact_rss` | 0 | 108.86 | 0.000 | 1.150 |
-| `selector:rule` | 0.834 | 49884 | 15744 | `compact_rss` | 3 | 5307.11 | 0.000 | 1.143 |
+| `fixed:fragmentation_stable` | 0.086 | 1699411 | 15616 | `fragmentation_stable` | 0 | 3578.90 | 0.000 | 0.048 |
+| `selector:model` | 0.116 | 951327 | 15616 | `throughput_cache` | 3 | 2912.11 | 0.000 | 0.318 |
+| `fixed:balanced` | 0.130 | 1599121 | 15616 | `balanced` | 0 | 5375.15 | 0.000 | 0.048 |
+| `fixed:deterministic_latency` | 0.130 | 1932423 | 15616 | `deterministic_latency` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:cross_thread` | 0.131 | 1549492 | 15616 | `cross_thread` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:throughput_cache` | 0.132 | 1344712 | 15616 | `throughput_cache` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:compact_rss` | 0.285 | 46102 | 15616 | `compact_rss` | 0 | 108.86 | 0.000 | 1.150 |
+| `fixed:large_object` | 0.306 | 48300 | 15616 | `large_object` | 0 | 56.13 | 0.000 | 1.433 |
+| `selector:rule` | 0.402 | 53008 | 15616 | `compact_rss` | 3 | 5307.11 | 0.000 | 1.143 |
 
 ## `rss_peak_release:seed20005` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `selector:model` | 0.160 | 1198063 | 16384 | `fragmentation_stable` | 3 | 190.51 | 0.000 | 0.055 |
-| `fixed:balanced` | 0.259 | 1640153 | 16256 | `balanced` | 0 | 5375.15 | 0.000 | 0.048 |
-| `fixed:deterministic_latency` | 0.261 | 1923779 | 16256 | `deterministic_latency` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:throughput_cache` | 0.262 | 1614492 | 16256 | `throughput_cache` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:fragmentation_stable` | 0.322 | 1803162 | 16384 | `fragmentation_stable` | 0 | 3578.90 | 0.000 | 0.048 |
-| `fixed:large_object` | 0.322 | 1439803 | 16384 | `large_object` | 0 | 3578.90 | 0.000 | 0.048 |
-| `fixed:cross_thread` | 0.412 | 1960365 | 16384 | `cross_thread` | 0 | 5429.58 | 0.000 | 0.048 |
-| `fixed:compact_rss` | 0.588 | 49120 | 16256 | `compact_rss` | 0 | 108.86 | 0.000 | 1.150 |
-| `selector:rule` | 0.984 | 51768 | 16384 | `compact_rss` | 3 | 5307.11 | 0.000 | 1.143 |
+| `fixed:fragmentation_stable` | 0.086 | 1529196 | 16128 | `fragmentation_stable` | 0 | 3578.90 | 0.000 | 0.048 |
+| `selector:model` | 0.117 | 801565 | 16128 | `throughput_cache` | 3 | 2912.11 | 0.000 | 0.318 |
+| `fixed:balanced` | 0.129 | 1587283 | 16128 | `balanced` | 0 | 5375.15 | 0.000 | 0.048 |
+| `fixed:deterministic_latency` | 0.130 | 1611133 | 16128 | `deterministic_latency` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:throughput_cache` | 0.130 | 1541292 | 16128 | `throughput_cache` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:cross_thread` | 0.132 | 1150940 | 16128 | `cross_thread` | 0 | 5429.58 | 0.000 | 0.048 |
+| `fixed:compact_rss` | 0.285 | 43074 | 16128 | `compact_rss` | 0 | 108.86 | 0.000 | 1.150 |
+| `fixed:large_object` | 0.312 | 43491 | 16128 | `large_object` | 0 | 56.13 | 0.000 | 1.433 |
+| `selector:rule` | 0.416 | 45385 | 16128 | `compact_rss` | 3 | 5307.11 | 0.000 | 1.143 |
 
 ## `throughput_churn:seed20001` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:cross_thread` | 0.261 | 6811525 | 13952 | `cross_thread` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:deterministic_latency` | 0.261 | 6611317 | 13952 | `deterministic_latency` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:fragmentation_stable` | 0.261 | 5691955 | 13952 | `fragmentation_stable` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:balanced` | 0.261 | 5678027 | 13952 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:throughput_cache` | 0.261 | 5453986 | 13952 | `throughput_cache` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:large_object` | 0.412 | 6876373 | 14080 | `large_object` | 0 | 190.51 | 0.000 | 0.001 |
-| `selector:model` | 0.412 | 5263027 | 14080 | `fragmentation_stable` | 2 | 190.51 | 0.000 | 0.001 |
-| `selector:rule` | 0.412 | 4792663 | 14080 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:compact_rss` | 0.588 | 51574 | 13952 | `compact_rss` | 0 | 108.86 | 0.000 | 1.000 |
+| `fixed:fragmentation_stable` | 0.130 | 7272776 | 13952 | `fragmentation_stable` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:cross_thread` | 0.130 | 6497524 | 13952 | `cross_thread` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:deterministic_latency` | 0.130 | 6456404 | 13952 | `deterministic_latency` | 0 | 190.51 | 0.000 | 0.001 |
+| `selector:model` | 0.130 | 5616122 | 13952 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `selector:rule` | 0.130 | 5555941 | 13952 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:throughput_cache` | 0.131 | 5348339 | 13952 | `throughput_cache` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:balanced` | 0.131 | 5241584 | 13952 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:large_object` | 0.300 | 60290 | 13952 | `large_object` | 0 | 56.13 | 0.000 | 1.000 |
+| `fixed:compact_rss` | 0.364 | 55339 | 13952 | `compact_rss` | 0 | 108.86 | 0.000 | 1.000 |
 
 ## `throughput_churn:seed20002` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:fragmentation_stable` | 0.261 | 7291076 | 14464 | `fragmentation_stable` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:deterministic_latency` | 0.261 | 7167249 | 14464 | `deterministic_latency` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:cross_thread` | 0.261 | 6825113 | 14464 | `cross_thread` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:large_object` | 0.261 | 6345076 | 14464 | `large_object` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:balanced` | 0.261 | 6178687 | 14464 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:throughput_cache` | 0.261 | 6091826 | 14464 | `throughput_cache` | 0 | 190.51 | 0.000 | 0.001 |
-| `selector:model` | 0.261 | 5554951 | 14464 | `fragmentation_stable` | 2 | 190.51 | 0.000 | 0.001 |
-| `selector:rule` | 0.261 | 5153272 | 14464 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:compact_rss` | 0.588 | 54140 | 14464 | `compact_rss` | 0 | 108.86 | 0.000 | 1.000 |
+| `fixed:throughput_cache` | 0.130 | 7803655 | 14336 | `throughput_cache` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:fragmentation_stable` | 0.130 | 7804095 | 14336 | `fragmentation_stable` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:cross_thread` | 0.130 | 7612462 | 14336 | `cross_thread` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:deterministic_latency` | 0.130 | 7368378 | 14336 | `deterministic_latency` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:balanced` | 0.130 | 6669381 | 14336 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `selector:rule` | 0.131 | 5049368 | 14336 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `selector:model` | 0.131 | 4576145 | 14336 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:large_object` | 0.309 | 60478 | 14336 | `large_object` | 0 | 56.13 | 0.000 | 1.000 |
+| `fixed:compact_rss` | 0.364 | 59009 | 14336 | `compact_rss` | 0 | 108.86 | 0.000 | 1.000 |
 
 ## `throughput_churn:seed20003` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:cross_thread` | 0.261 | 6929375 | 15104 | `cross_thread` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:large_object` | 0.261 | 6491187 | 15104 | `large_object` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:deterministic_latency` | 0.261 | 6092762 | 15104 | `deterministic_latency` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:balanced` | 0.261 | 5684483 | 15104 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:fragmentation_stable` | 0.261 | 5474595 | 15104 | `fragmentation_stable` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:throughput_cache` | 0.261 | 5361786 | 15104 | `throughput_cache` | 0 | 190.51 | 0.000 | 0.001 |
-| `selector:model` | 0.261 | 5038608 | 15104 | `fragmentation_stable` | 2 | 190.51 | 0.000 | 0.001 |
-| `selector:rule` | 0.261 | 4872250 | 15104 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:compact_rss` | 0.588 | 46679 | 15104 | `compact_rss` | 0 | 108.86 | 0.000 | 1.000 |
+| `fixed:throughput_cache` | 0.130 | 8135444 | 14848 | `throughput_cache` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:balanced` | 0.130 | 6796520 | 14848 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:fragmentation_stable` | 0.338 | 7842169 | 14976 | `fragmentation_stable` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:cross_thread` | 0.338 | 7733960 | 14976 | `cross_thread` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:deterministic_latency` | 0.338 | 7023363 | 14976 | `deterministic_latency` | 0 | 190.51 | 0.000 | 0.001 |
+| `selector:model` | 0.338 | 5803585 | 14976 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `selector:rule` | 0.338 | 5680973 | 14976 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:large_object` | 0.510 | 63086 | 14976 | `large_object` | 0 | 56.13 | 0.000 | 1.000 |
+| `fixed:compact_rss` | 0.572 | 59011 | 14976 | `compact_rss` | 0 | 108.86 | 0.000 | 1.000 |
 
 ## `throughput_churn:seed20004` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:throughput_cache` | 0.261 | 7313315 | 15616 | `throughput_cache` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:deterministic_latency` | 0.261 | 7309885 | 15616 | `deterministic_latency` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:large_object` | 0.261 | 7041076 | 15616 | `large_object` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:cross_thread` | 0.261 | 6498729 | 15616 | `cross_thread` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:fragmentation_stable` | 0.261 | 6241434 | 15616 | `fragmentation_stable` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:balanced` | 0.261 | 5857151 | 15616 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
-| `selector:model` | 0.261 | 4514324 | 15616 | `fragmentation_stable` | 2 | 190.51 | 0.000 | 0.001 |
-| `selector:rule` | 0.262 | 4309892 | 15616 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:compact_rss` | 0.588 | 54970 | 15616 | `compact_rss` | 0 | 108.86 | 0.000 | 1.000 |
+| `fixed:deterministic_latency` | 0.130 | 7197930 | 15360 | `deterministic_latency` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:throughput_cache` | 0.130 | 7030925 | 15360 | `throughput_cache` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:cross_thread` | 0.130 | 6928593 | 15360 | `cross_thread` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:fragmentation_stable` | 0.130 | 5899999 | 15360 | `fragmentation_stable` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:balanced` | 0.131 | 5440639 | 15360 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `selector:model` | 0.338 | 5419309 | 15488 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `selector:rule` | 0.338 | 4321824 | 15488 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:compact_rss` | 0.364 | 56106 | 15360 | `compact_rss` | 0 | 108.86 | 0.000 | 1.000 |
+| `fixed:large_object` | 0.517 | 57331 | 15488 | `large_object` | 0 | 56.13 | 0.000 | 1.000 |
 
 ## `throughput_churn:seed20005` Details
 
 | Case | Score | Ops/sec | Peak RSS KB | Final mode | Switches | mapped/live | frag | slow-path |
 |---|---:|---:|---:|---|---:|---:|---:|---:|
-| `fixed:deterministic_latency` | 0.261 | 8027439 | 16000 | `deterministic_latency` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:throughput_cache` | 0.261 | 7490964 | 16000 | `throughput_cache` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:cross_thread` | 0.261 | 6901103 | 16000 | `cross_thread` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:balanced` | 0.261 | 6700504 | 16000 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:large_object` | 0.261 | 6594683 | 16000 | `large_object` | 0 | 190.51 | 0.000 | 0.001 |
-| `selector:model` | 0.261 | 5501653 | 16000 | `fragmentation_stable` | 2 | 190.51 | 0.000 | 0.001 |
-| `fixed:fragmentation_stable` | 0.261 | 4838431 | 16000 | `fragmentation_stable` | 0 | 190.51 | 0.000 | 0.001 |
-| `selector:rule` | 0.412 | 4963754 | 16128 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
-| `fixed:compact_rss` | 0.588 | 53670 | 16000 | `compact_rss` | 0 | 108.86 | 0.000 | 1.000 |
+| `fixed:throughput_cache` | 0.130 | 7851062 | 15872 | `throughput_cache` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:deterministic_latency` | 0.130 | 7122801 | 15872 | `deterministic_latency` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:balanced` | 0.130 | 7065612 | 15872 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:cross_thread` | 0.130 | 7033360 | 15872 | `cross_thread` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:fragmentation_stable` | 0.130 | 6441028 | 15872 | `fragmentation_stable` | 0 | 190.51 | 0.000 | 0.001 |
+| `selector:model` | 0.131 | 4718492 | 15872 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:large_object` | 0.313 | 53526 | 15872 | `large_object` | 0 | 56.13 | 0.000 | 1.000 |
+| `selector:rule` | 0.338 | 4431985 | 16000 | `balanced` | 0 | 190.51 | 0.000 | 0.001 |
+| `fixed:compact_rss` | 0.351 | 58334 | 15872 | `compact_rss` | 0 | 108.86 | 0.000 | 1.000 |
 

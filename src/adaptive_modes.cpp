@@ -142,21 +142,24 @@ static ReleaseDecision cross_thread_free(AdaptiveHeader*) noexcept {
 }
 
 static AllocationPlan large_stream_allocate(size_t size, size_t alignment) noexcept {
-    StoragePreference storage = StoragePreference::Auto;
-    if (alignment > 16 || size >= 128 * 1024) storage = StoragePreference::Extent;
-    else if (size <= 1024) storage = StoragePreference::SizeClass;
+    // This mode is intentionally narrow: it optimizes bulk/streaming objects by
+    // isolating allocations >= 4 KiB from shared size-class/span pools. Small
+    // objects still work, but do not get thread-cache/batch help; otherwise this
+    // mode becomes a general-purpose fast path and the selector overuses it.
+    StoragePreference storage = StoragePreference::SizeClass;
+    if (alignment > 16 || size >= 4 * 1024) storage = StoragePreference::DirectMap;
     return make_plan(storage, false, false, true, false, false,
-                     storage == StoragePreference::DirectMap || storage == StoragePreference::Extent,
-                     false, false, 4, 1, 0, 0, 128 * 1024);
+                     storage == StoragePreference::DirectMap,
+                     false, false, 1, 0, 0, 0, 4 * 1024);
 }
 
 static ReleaseDecision large_stream_free(AdaptiveHeader* hdr) noexcept {
     if (hdr && hdr->storage == AdaptiveStorageId::DirectMap) {
-        return make_release(ReleaseAction::Cache, false, false, false,
-                            false, 1);
+        return make_release(ReleaseAction::Unmap, false, false, false,
+                            false, 0);
     }
-    return make_release(ReleaseAction::ReturnToCentralPool, false, false, false,
-                        false, 1);
+    return make_release(ReleaseAction::Purge, false, false, false,
+                        false, 0);
 }
 
 static AllocationPlan hardened_allocate(size_t, size_t) noexcept {

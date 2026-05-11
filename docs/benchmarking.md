@@ -137,8 +137,8 @@ Adaptive-specific runtime parameters can be set through the environment when `--
 |---|---|
 | `MY_MALLOC_ADAPTIVE_MODE` | `balanced`, `throughput_cache`, `deterministic_latency`, `compact_rss`, `fragmentation_stable`, `cross_thread`, `large_object`, `hardened_debug`, or `auto`. |
 | `MY_MALLOC_ADAPTIVE_MODE_SELECTOR` | `model` by default; `rule` is a legacy/debug baseline; `fixed` and `manual` are test controls. |
-| `MY_MALLOC_ADAPTIVE_MODE_WINDOW` | Selector observation window. |
-| `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` | Cooldown in windows after a mode switch. |
+| `MY_MALLOC_ADAPTIVE_MODE_WINDOW` | Selector observation window. Default: `1024`. |
+| `MY_MALLOC_ADAPTIVE_MODE_COOLDOWN` | Cooldown in windows after a mode switch. Default: `1`. |
 | `MY_MALLOC_ADAPTIVE_DEBUG_MODE` | Force `hardened_debug` when set to `1`. |
 | `MY_MALLOC_ADAPTIVE_SMALL_PAGE_SIZE` | Initial small-object page size. |
 | `MY_MALLOC_ADAPTIVE_MEDIUM_SPAN_SIZE` | Initial medium-object span size. |
@@ -179,9 +179,9 @@ not just small parameter changes:
   and avoid returning remote objects to the freeing thread cache.
 - `fragmentation_stable`: long mixed-size runs use occupancy-aware page/span
   packing to keep partial spans from spreading.
-- `large_object`: true large object streams (`>=128 KiB`) use the extent/direct
-  path and a small bounded extent reuse ring; medium objects stay in normal
-  page/span services.
+- `large_object`: streaming-large workloads use direct-map isolation and unmap
+  release decisions; selector `large_bytes_ratio` counts request-size bytes
+  above 256 KiB so medium fragmentation workloads stay separate.
 
 JSON example:
 
@@ -193,7 +193,7 @@ JSON example:
 {"strategy":"adaptive","benchmark":"same_size_64","ops_per_sec":24000000,"ms":41.000,"peak_rss_kb":31104,"adaptive":{"current_mode":"balanced","active_mode":"balanced","previous_mode":"balanced","mode_switches":0,"retired_mode_count":0,"mapped_bytes":65536,"live_bytes":0,"mapped_live_ratio":0.000,"remote_free_ratio":0.000,"size_entropy":0.000,"large_bytes_ratio":0.000,"fragmentation_estimate":0.000,"slow_path_ratio":0.000,"double_free_count":0,"invalid_free_count":0,"storage_allocs":[1,0,0],"storage_frees":[1,0,0],"pool_hits":[0,0,0],"pool_misses":[1,0,0]}}
 ```
 
-Adaptive JSON is centered on the two-layer architecture: mode fields describe the policy layer, storage/cache/release fields describe the shared memory layer, and feature ratios describe selector inputs. Important adaptive fields are `current_mode`, `mode_switches`, per-mode alloc/free/live/mapped arrays, `storage_allocs`, `storage_frees`, `pool_hits`, `pool_misses`, `release_unmapped_bytes`, `mapped_live_ratio`, `remote_free_ratio`, `size_entropy`, `large_bytes_ratio`, `fragmentation_estimate`, and `slow_path_ratio`.
+Adaptive JSON is centered on the two-layer architecture: mode fields describe the policy layer, storage/cache/release fields describe the shared memory layer, and feature ratios describe selector inputs. Important adaptive fields are `current_mode`, `mode_switches`, per-mode alloc/free/live/mapped arrays, `storage_allocs`, `storage_frees`, `pool_hits`, `pool_misses`, `release_unmapped_bytes`, `mapped_live_ratio`, `remote_free_ratio`, `size_entropy`, `large_bytes_ratio`, `fragmentation_estimate`, and `slow_path_ratio`. `large_bytes_ratio` is based on allocation request-size buckets, not on which storage helper happened to serve the object.
 
 When the generated workload telemetry server is enabled, `/snapshot` also
 includes selector event fields such as `selector_backend`, `model_candidate`,

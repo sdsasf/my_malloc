@@ -78,7 +78,7 @@ static int remote_selector() {
 
 static int large_selector() {
     for (int i = 0; i < 160; ++i) {
-        void* p = my_ptmalloc::adaptive_malloc(128 * 1024);
+        void* p = my_ptmalloc::adaptive_malloc(512 * 1024);
         my_ptmalloc::adaptive_free(p);
     }
     if (my_ptmalloc::adaptive_current_mode() != AdaptiveModeId::LargeObjectStreaming) {

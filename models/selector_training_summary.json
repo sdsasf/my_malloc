@@ -22,47 +22,50 @@
     "LargeObjectStreaming",
     "HardenedDebug"
   ],
-  "model_id": "learned_cost_gbdt_v2_n784_t70",
+  "model_id": "learned_cost_gbdt_v3_n784_t70",
   "note": "The objective cost and selector model are trained from measured rows; no hand-written score weights or mode oracle are used for training.",
   "test_metrics": {
     "example_count": 196,
-    "mean_absolute_error": 0.04993185526307599,
-    "mean_regret": 0.0029805842240017413,
+    "mean_absolute_error": 0.0750645920766703,
+    "mean_regret": 0.03766778643990061,
     "mode_pick_counts": {
-      "Balanced": 8,
-      "CompactRSS": 4,
+      "Balanced": 9,
+      "CompactRSS": 0,
       "CrossThreadMessage": 0,
-      "DeterministicLatency": 0,
-      "FragmentationStable": 4,
+      "DeterministicLatency": 4,
+      "FragmentationStable": 7,
       "HardenedDebug": 0,
-      "LargeObjectStreaming": 12,
-      "ThroughputCache": 0
+      "LargeObjectStreaming": 4,
+      "ThroughputCache": 4
     },
-    "top1_accuracy": 0.6428571428571429,
+    "top1_accuracy": 0.4642857142857143,
     "workload_count": 28
   },
   "train_metrics": {
     "example_count": 784,
-    "mean_absolute_error": 0.04690019757258647,
-    "mean_regret": 0.0027806028528762215,
+    "mean_absolute_error": 0.06536276086879007,
+    "mean_regret": 0.025541672192320595,
     "mode_pick_counts": {
-      "Balanced": 32,
-      "CompactRSS": 16,
+      "Balanced": 37,
+      "CompactRSS": 0,
       "CrossThreadMessage": 0,
-      "DeterministicLatency": 0,
-      "FragmentationStable": 16,
+      "DeterministicLatency": 16,
+      "FragmentationStable": 27,
       "HardenedDebug": 0,
-      "LargeObjectStreaming": 48,
-      "ThroughputCache": 0
+      "LargeObjectStreaming": 16,
+      "ThroughputCache": 16
     },
-    "top1_accuracy": 0.6160714285714286,
+    "top1_accuracy": 0.41964285714285715,
     "workload_count": 112
   },
   "training": {
     "examples": 980,
     "label_source": "learned objective cost from fixed-mode measured benchmark rows",
     "learning_rate": 0.35,
+    "mode_prior_shrink": 0.75,
     "objective_model": {
+      "epochs": 200,
+      "learning_rate": 0.08,
       "metrics": [
         "ms",
         "peak_rss_kb",
@@ -72,19 +75,21 @@
         "mode_switches",
         "validation_errors"
       ],
-      "pairwise_accuracy": 0.9431111111111111,
-      "switch_cost": 0.01086360930887248,
+      "pairwise_accuracy": 0.966282165039929,
+      "regularization": 0.04,
+      "switch_cost": 0.010152543946838372,
       "weights": {
-        "fragmentation_estimate": 1.0909762046630114e-39,
-        "mapped_live_ratio": 0.2608173174524957,
-        "mode_switches": 1.0909762046630114e-39,
-        "ms": 0.1295169744222498,
-        "peak_rss_kb": 0.15111483152393412,
-        "slow_path_ratio": 0.4585508766013204,
-        "validation_errors": 1.0909762046630114e-39
+        "fragmentation_estimate": 0.3200476708119785,
+        "mapped_live_ratio": 0.1300964609042562,
+        "mode_switches": 0.014492904017132494,
+        "ms": 0.16758895997936948,
+        "peak_rss_kb": 0.20743375551664492,
+        "slow_path_ratio": 0.14584734475348585,
+        "validation_errors": 0.014492904017132494
       }
     },
     "rounds_per_mode": 10,
+    "signature_source": "balanced",
     "test_examples": 196,
     "train_examples": 784,
     "tree_count": 70
