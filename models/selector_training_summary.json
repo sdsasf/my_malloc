@@ -26,36 +26,36 @@
   "note": "The objective cost and selector model are trained from measured rows; no hand-written score weights or mode oracle are used for training.",
   "test_metrics": {
     "example_count": 196,
-    "mean_absolute_error": 0.09296766760721459,
-    "mean_regret": 0.05249583610160559,
+    "mean_absolute_error": 0.04993185526307599,
+    "mean_regret": 0.0029805842240017413,
     "mode_pick_counts": {
-      "Balanced": 4,
-      "CompactRSS": 5,
+      "Balanced": 8,
+      "CompactRSS": 4,
       "CrossThreadMessage": 0,
       "DeterministicLatency": 0,
       "FragmentationStable": 4,
       "HardenedDebug": 0,
-      "LargeObjectStreaming": 15,
+      "LargeObjectStreaming": 12,
       "ThroughputCache": 0
     },
-    "top1_accuracy": 0.5714285714285714,
+    "top1_accuracy": 0.6428571428571429,
     "workload_count": 28
   },
   "train_metrics": {
     "example_count": 784,
-    "mean_absolute_error": 0.08133672118268342,
-    "mean_regret": 0.04301718206419884,
+    "mean_absolute_error": 0.04690019757258647,
+    "mean_regret": 0.0027806028528762215,
     "mode_pick_counts": {
-      "Balanced": 16,
-      "CompactRSS": 22,
+      "Balanced": 32,
+      "CompactRSS": 16,
       "CrossThreadMessage": 0,
       "DeterministicLatency": 0,
       "FragmentationStable": 16,
       "HardenedDebug": 0,
-      "LargeObjectStreaming": 58,
+      "LargeObjectStreaming": 48,
       "ThroughputCache": 0
     },
-    "top1_accuracy": 0.5892857142857143,
+    "top1_accuracy": 0.6160714285714286,
     "workload_count": 112
   },
   "training": {
@@ -72,16 +72,16 @@
         "mode_switches",
         "validation_errors"
       ],
-      "pairwise_accuracy": 0.9216300940438872,
-      "switch_cost": 0.035331101258799555,
+      "pairwise_accuracy": 0.9431111111111111,
+      "switch_cost": 0.01086360930887248,
       "weights": {
-        "fragmentation_estimate": 0.12347928232617354,
-        "mapped_live_ratio": 0.17836201221705836,
-        "mode_switches": 0.04906732792945842,
-        "ms": 0.0846873094982829,
-        "peak_rss_kb": 0.38561888513948417,
-        "slow_path_ratio": 0.1297178549600842,
-        "validation_errors": 0.04906732792945842
+        "fragmentation_estimate": 1.0909762046630114e-39,
+        "mapped_live_ratio": 0.2608173174524957,
+        "mode_switches": 1.0909762046630114e-39,
+        "ms": 0.1295169744222498,
+        "peak_rss_kb": 0.15111483152393412,
+        "slow_path_ratio": 0.4585508766013204,
+        "validation_errors": 1.0909762046630114e-39
       }
     },
     "rounds_per_mode": 10,

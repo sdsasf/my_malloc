@@ -123,8 +123,8 @@ Detailed design: [adaptive_allocator.md](adaptive_allocator.md).
 
 Summary:
 
-- Shared Memory Management Layer owns `AdaptiveHeader`, registry, page table, size-class pages, spans, direct mappings, free lists, reclaim, and telemetry events.
-- Adaptive Mode Policy Layer owns `AllocationPlan` and `ReleaseDecision` generation for `Balanced`, `ThroughputCache`, `DeterministicLatency`, `CompactRSS`, `FragmentationStable`, `CrossThreadMessage`, `LargeObjectStreaming`, and `HardenedDebug`.
+- Shared Memory Management Layer owns `AdaptiveHeader`, registry, page table, size-class pages, spans, true-large extents/direct mappings, thread-local magazines, owner remote-free queues, central free lists, reclaim, and telemetry events.
+- Adaptive Mode Policy Layer owns `AllocationPlan` and `ReleaseDecision` generation for `Balanced`, `ThroughputCache`, `DeterministicLatency`, `CompactRSS`, `FragmentationStable`, `CrossThreadMessage`, `LargeObjectStreaming`, and `HardenedDebug`. Modes combine shared cache, reclaim, remote-free, occupancy-packing, extent, and debug services instead of acting as separate allocator copies.
 - Runtime Telemetry and Selector extracts `WorkloadFeatures`, applies the offline-trained model selector with window/cooldown/hysteresis, and soft-switches active mode. The older rule selector is kept only as an explicit baseline.
 
 ## Validation And Benchmarking

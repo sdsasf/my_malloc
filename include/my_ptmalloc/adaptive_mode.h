@@ -14,8 +14,13 @@ struct AllocationPlan {
     bool debug_redzone;
     bool debug_quarantine;
     bool prefer_direct_map;
+    bool drain_remote_queue;
+    bool prefer_occupancy_packing;
     uint32_t batch_size;
     uint32_t empty_keep_limit;
+    uint32_t tcache_small_limit;
+    uint32_t tcache_medium_limit;
+    size_t direct_map_threshold;
 };
 
 struct AdaptiveModePolicy {

@@ -25,8 +25,10 @@ Responsibilities:
 - maintain ownership page table and registry lookup;
 - manage size-class pages for small objects;
 - manage span-backed storage for medium objects;
-- manage extent/direct mappings for large, aligned, and debug objects;
-- manage central free lists and shared pools;
+- manage extent/direct mappings for true large, aligned, and debug objects;
+- manage central free lists, thread-local magazines, remote-free queues, and shared pools;
+- pack or spread allocations according to the mode's fragmentation policy;
+- cache bounded large extents for streaming reuse;
 - execute reclaim decisions: cache, purge, unmap, quarantine;
 - record object owner thread, requested size, usable size, mapped size, and allocation-time `mode_id`;
 - emit raw telemetry events.
@@ -42,20 +44,20 @@ Files:
 
 Modes return:
 
-- `AllocationPlan`: storage preference, cache/reuse/RSS/debug intent, batch hint, empty keep limit;
-- `ReleaseDecision`: cache, return to central pool, purge, unmap, or quarantine, plus poison/redzone flags.
+- `AllocationPlan`: storage preference, cache/reuse/RSS/debug intent, remote-drain policy, occupancy-packing policy, batch hint, tcache limits, empty keep limit, and direct-map threshold;
+- `ReleaseDecision`: cache, return to central pool, purge, unmap, or quarantine, plus poison/redzone, remote-queue, cache-limit, and reclaim-limit fields.
 
 Modes do not directly mutate page/span/mmap internals.
 
 | Mode | AllocationPlan | ReleaseDecision | Current status |
 |---|---|---|---|
-| `Balanced` | `Auto`, reuse enabled, default empty keep limit | return to central pool | Stable baseline |
-| `ThroughputCache` | size-class/span preference, reuse, real TLS cache, larger batch, higher keep limit | cache | Thread-local cache implemented for size-class pages and spans |
-| `DeterministicLatency` | `Auto`, reuse, bounded TLS cache smaller than throughput mode, avoids aggressive release | cache with low per-bin limits | Stable hot-path reuse implemented; sampled p99 telemetry is future work |
-| `CompactRSS` | low-RSS, no thread cache, direct map for large objects, keep limit 0 | targeted purge/unmap of the emptied page/span | Fine-grained empty page/span reclaim implemented |
-| `FragmentationStable` | `Auto` for small objects, direct-map isolation for objects >= 32 KiB or high size-class waste, low keep limit | unmap isolated direct mappings; otherwise return to central pool | Waste-aware medium routing implemented; full adaptive table rebalance is future work |
-| `CrossThreadMessage` | `Auto`, owner-aware remote-free queue, owner-side drain into TLS cache | return to central pool | Remote-free queue implemented for pooled objects |
-| `LargeObjectStreaming` | direct map for objects >= 4 KiB, size-class for small | unmap direct mappings | Large object isolation implemented |
+| `Balanced` | `Auto`, reuse enabled, no TLS magazine, default empty keep limit | return to central pool with default keep limit | Stable shared-pool baseline |
+| `ThroughputCache` | size-class/span preference, large thread-local magazine, batch refill, high empty keep limit | cache with high per-bin limits | Hot same-thread churn path implemented |
+| `DeterministicLatency` | `Auto`, small bounded TLS magazine, fixed small batch, avoids aggressive release | cache with bounded per-bin limits | Stable hot-path reuse implemented; sampled p99 telemetry is future work |
+| `CompactRSS` | low-RSS, no thread cache, occupancy packing, direct map only above compact threshold, keep limit 0 | targeted purge/unmap of the emptied page/span | Fine-grained empty page/span reclaim implemented |
+| `FragmentationStable` | span/page storage with occupancy-aware packing and low keep limit; avoids turning medium objects into large direct maps | return to central pool with low keep limit; unmap only true direct mappings | Occupancy-aware reuse implemented; adaptive size-class table rebalance is future work |
+| `CrossThreadMessage` | owner-aware remote-free queue, owner-side drain on cache miss, moderate TLS magazine | remote frees enqueue to owner; local frees cache | Remote-free queue implemented for pooled objects |
+| `LargeObjectStreaming` | extent/direct-map path only for true large objects (`>=128 KiB`), small/medium stays in normal services, bounded large extent reuse cache | cache a small bounded direct-map extent ring, otherwise return/unmap | Large-object isolation no longer covers medium objects |
 | `HardenedDebug` | direct map, no reuse, header canary, tail redzone, quarantine intent | quarantine with poison/redzone checks | Header checks, double-free/invalid-free counters, poison, quarantine retention, and tail redzone validation implemented |
 
 ## Runtime Telemetry and Selector
@@ -101,8 +103,8 @@ The selector extracts these as delta-window features. Hot-path telemetry keeps c
 
 At each selector window boundary, `src/adaptive_selector.cpp` records an
 `AdaptiveSelectorEvent` into a fixed-size ring buffer. Each event stores the
-previous/current/candidate mode, selector backend, rule candidate, model
-candidate, model confidence, whether a guard was applied, whether a soft switch
+previous/current/candidate mode, selector backend, rule candidate for explicit
+rule-baseline runs, model candidate, model confidence, whether a soft switch
 happened, the decision reason, and the window feature values used for the
 decision. Tooling such as `bench_runner` reads this ring buffer for explanation;
 it does not call `adaptive_extract_window_features()` from the Web snapshot path.
@@ -222,7 +224,7 @@ Implemented:
 - thread-local cache bins for size-class pages and spans;
 - owner-keyed remote-free queues with owner-side drain;
 - compact RSS targeted reclaim of the exact empty page/span on free;
-- fragmentation-stable direct-map isolation for high-waste medium sizes;
+- fragmentation-stable occupancy-aware page/span reuse;
 - hardened debug header cookie and tail redzone validation;
 - per-mode and per-storage stats;
 - remote-free telemetry;
@@ -230,14 +232,14 @@ Implemented:
 - offline-trained compact model selector as the default auto selector;
 - delta-window feature extraction for selector decisions;
 - compact RSS purge/unmap behavior;
-- large-object direct-map isolation;
+- true-large extent/direct-map isolation with bounded reuse;
 - hardened debug poison and quarantine mapping retention.
 
 Future work:
 
-- dynamic tcache sizing and batch refill/drain tuning;
+- dynamic tcache sizing and deeper batch drain tuning;
 - larger remote-free table and abandoned-owner cleanup;
-- fragmentation-stable adaptive size-class table rebalancing beyond the current waste-aware routing;
+- fragmentation-stable adaptive size-class table rebalancing beyond the current occupancy-aware packing;
 - sampled p95/p99 latency;
 - front redzone/page-guard debug variants;
 - configurable multi-window smoothing for noisy workloads.

@@ -168,6 +168,21 @@ MY_MALLOC_ADAPTIVE_MODE=auto MY_MALLOC_ADAPTIVE_MODE_SELECTOR=model \
   --workload-template adaptive_mix --json
 ```
 
+Adaptive fixed-mode comparisons are intended to show different workload shapes,
+not just small parameter changes:
+
+- `throughput_cache`: same-thread churn should show the highest operation rate,
+  with higher retained memory accepted.
+- `compact_rss`: phase-changing and fragmentation/RSS workloads should show
+  lower retained mapped memory, at the cost of more slow-path work.
+- `cross_thread`: producer-consumer workloads exercise owner remote-free queues
+  and avoid returning remote objects to the freeing thread cache.
+- `fragmentation_stable`: long mixed-size runs use occupancy-aware page/span
+  packing to keep partial spans from spreading.
+- `large_object`: true large object streams (`>=128 KiB`) use the extent/direct
+  path and a small bounded extent reuse ring; medium objects stay in normal
+  page/span services.
+
 JSON example:
 
 ```bash

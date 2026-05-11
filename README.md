@@ -140,8 +140,8 @@ MY_MALLOC_MODE=adaptive MY_MALLOC_ADAPTIVE_MODE=auto MY_MALLOC_ADAPTIVE_MODE_SEL
 
 `MY_MALLOC_MODE=adaptive` is a standalone adaptive allocator backend. It is not a dispatcher over `ptmalloc`, `jemalloc_like`, `tcmalloc_like`, or `mimalloc_like`. Its architecture is:
 
-1. **Shared Memory Management Layer**: `AdaptiveHeader`, ownership table, registry, size-class pages, spans, direct mappings/extents, central free lists, reclaim, and raw telemetry events.
-2. **Adaptive Mode Policy Layer**: each mode returns an `AllocationPlan` and `ReleaseDecision`; modes do not directly manipulate page/span/mmap internals.
+1. **Shared Memory Management Layer**: `AdaptiveHeader`, ownership table, registry, size-class pages, spans, true-large extents/direct mappings, central free lists, thread-local magazines, remote-free queues, reclaim, and raw telemetry events.
+2. **Adaptive Mode Policy Layer**: each mode returns an `AllocationPlan` and `ReleaseDecision`; modes combine cache, reclaim, remote-free, occupancy-packing, extent, and debug services without directly mutating page/span/mmap internals.
 3. **Runtime Telemetry and Selector**: extracts workload features, applies the offline-trained model selector with window/cooldown/hysteresis, and soft-switches the active mode.
 
 Soft switching only affects future allocations. `free`, `realloc`, and `usable_size` route through allocation-time `mode_id` in `AdaptiveHeader`.
@@ -165,6 +165,13 @@ only evaluates a compact cost model at selector window boundaries. `auto`
 adaptive mode defaults to this model path; it does not combine model decisions
 with the legacy rule selector. The design, diagrams, training pipeline, and
 validation notes are in [docs/adaptive_selector_model.md](docs/adaptive_selector_model.md).
+
+The current mode split is workload-oriented rather than size-path-oriented:
+`throughput_cache` uses large thread-local magazines and batch refill for
+same-thread churn, `compact_rss` aggressively purges empty pages/spans,
+`cross_thread` routes remote frees through owner queues, `fragmentation_stable`
+packs partial pages/spans by occupancy, and `large_object` is restricted to
+true large objects plus a bounded extent reuse ring.
 
 Enable optional observability:
 

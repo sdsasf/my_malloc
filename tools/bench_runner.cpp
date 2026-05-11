@@ -484,6 +484,12 @@ enum class GeneratedPhaseKind {
     LargeBurst,
     PeakRelease,
     LatencyLoop,
+
+    // Diagnostic workloads for selector validation.
+    TinyCacheChurn,
+    RemoteDominant,
+    MediumFragStrong,
+    RssDecayHold,
 };
 
 struct GeneratedPhase {
@@ -577,6 +583,19 @@ static void metrics_realloc(GeneratedMetrics& m, size_t old_size, size_t new_siz
 }
 
 static std::vector<GeneratedPhase> generated_template(const std::string& name) {
+    if (name == "tiny_cache_churn") {
+        return {{"tiny_cache_churn", GeneratedPhaseKind::TinyCacheChurn, 10}};
+    }
+    if (name == "remote_dominant") {
+        return {{"remote_dominant", GeneratedPhaseKind::RemoteDominant, 10}};
+    }
+    if (name == "medium_frag_strong") {
+        return {{"medium_frag_strong", GeneratedPhaseKind::MediumFragStrong, 10}};
+    }
+    if (name == "rss_decay_hold") {
+        return {{"rss_decay_hold", GeneratedPhaseKind::RssDecayHold, 10}};
+    }
+
     if (name == "throughput_churn") {
         return {{"small_churn", GeneratedPhaseKind::SmallChurn, 8},
                 {"latency_loop", GeneratedPhaseKind::LatencyLoop, 2}};
@@ -608,6 +627,21 @@ static std::vector<GeneratedPhase> generated_template(const std::string& name) {
 }
 
 static GeneratedPhaseKind generated_kind_from_name(const std::string& name) {
+    if (name.find("tiny_cache") != std::string::npos ||
+        name.find("small_cache") != std::string::npos) {
+        return GeneratedPhaseKind::TinyCacheChurn;
+    }
+    if (name.find("remote_dominant") != std::string::npos) {
+        return GeneratedPhaseKind::RemoteDominant;
+    }
+    if (name.find("medium_frag") != std::string::npos ||
+        name.find("frag_strong") != std::string::npos) {
+        return GeneratedPhaseKind::MediumFragStrong;
+    }
+    if (name.find("rss_decay") != std::string::npos) {
+        return GeneratedPhaseKind::RssDecayHold;
+    }
+
     if (name.find("fragmentation") != std::string::npos) return GeneratedPhaseKind::FragmentationDrift;
     if (name.find("remote") != std::string::npos || name.find("producer") != std::string::npos) {
         return GeneratedPhaseKind::RemoteFree;
@@ -1131,6 +1165,206 @@ static void run_generated_realtime(const StrategyDescriptor& s,
     }
 }
 
+static void run_tiny_cache_churn_phase(const StrategyDescriptor& s,
+                                       const BenchConfig& cfg,
+                                       GeneratedMetrics& m,
+                                       int ops) {
+    static constexpr size_t sizes[] = {16, 32, 64, 128};
+    static constexpr int batch = 256;
+
+    std::vector<PayloadRecord> ptrs(batch);
+    uint64_t id = 1;
+    int done = 0;
+
+    while (done < ops) {
+        int n = std::min(batch, ops - done);
+
+        // Allocate a batch of tiny objects.
+        for (int i = 0; i < n; ++i) {
+            size_t size = sizes[(i + done) % 4];
+            void* p = s.vtable.allocate(size);
+            payload_write(p, size, static_cast<unsigned char>(id));
+            ptrs[i] = {p, size, id++, static_cast<unsigned char>(id)};
+            metrics_alloc(m, size);
+        }
+
+        // Free in reverse order to create strong local reuse / cache behavior.
+        for (int i = n - 1; i >= 0; --i) {
+            validation_check_record(cfg, m, ptrs[i]);
+            s.vtable.deallocate(ptrs[i].ptr);
+            metrics_free(m, ptrs[i].size, false);
+            ptrs[i] = {};
+        }
+
+        done += n;
+    }
+}
+
+static void run_remote_dominant_phase(const StrategyDescriptor& s,
+                                      const BenchConfig& cfg,
+                                      GeneratedMetrics& m,
+                                      int ops,
+                                      int threads,
+                                      unsigned seed) {
+    int worker_count = std::max(2, threads);
+    int objects = std::max(worker_count * 256, ops / 2);
+
+    std::vector<PayloadRecord> ptrs(static_cast<size_t>(objects));
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> size_dist(32, 2048);
+
+    uint64_t id = 1;
+
+    // Allocate all objects on the current thread.
+    for (int i = 0; i < objects; ++i) {
+        size_t size = static_cast<size_t>(size_dist(rng));
+        void* p = s.vtable.allocate(size);
+        payload_write(p, size, static_cast<unsigned char>(id));
+        ptrs[static_cast<size_t>(i)] = {p, size, id++, static_cast<unsigned char>(id)};
+        metrics_alloc(m, size);
+    }
+
+    // Free them from other threads. Metrics are updated after join to avoid races.
+    std::vector<std::thread> workers;
+    for (int t = 0; t < worker_count; ++t) {
+        workers.emplace_back([&, t] {
+            for (int i = t; i < objects; i += worker_count) {
+                s.vtable.deallocate(ptrs[static_cast<size_t>(i)].ptr);
+            }
+        });
+    }
+    for (auto& th : workers) th.join();
+
+    for (int i = 0; i < objects; ++i) {
+        metrics_free(m, ptrs[static_cast<size_t>(i)].size, true);
+        ptrs[static_cast<size_t>(i)] = {};
+    }
+}
+
+static void run_medium_frag_strong_phase(const StrategyDescriptor& s,
+                                         const BenchConfig& cfg,
+                                         GeneratedMetrics& m,
+                                         int ops,
+                                         int slots,
+                                         unsigned seed) {
+    static constexpr size_t sizes[] = {
+        1024, 1536, 2048, 3072, 4096,
+        6144, 8192, 12288, 16384, 32768
+    };
+
+    int slot_count = std::max(128, slots);
+    std::vector<PayloadRecord> ptrs(static_cast<size_t>(slot_count));
+
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> slot_dist(0, slot_count - 1);
+    std::uniform_int_distribution<int> size_idx(0, static_cast<int>(std::size(sizes)) - 1);
+    std::uniform_int_distribution<int> action_dist(0, 9);
+
+    uint64_t id = 1;
+
+    for (int i = 0; i < ops; ++i) {
+        int idx = slot_dist(rng);
+        PayloadRecord& rec = ptrs[static_cast<size_t>(idx)];
+        int action = action_dist(rng);
+
+        if (!rec.ptr) {
+            size_t size = sizes[size_idx(rng)];
+            void* p = s.vtable.allocate(size);
+            payload_write(p, size, static_cast<unsigned char>(id));
+            rec = {p, size, id++, static_cast<unsigned char>(id)};
+            metrics_alloc(m, size);
+            continue;
+        }
+
+        validation_check_record(cfg, m, rec);
+
+        if (action < 4) {
+            // Realloc to a different medium size to create size-class drift.
+            size_t new_size = sizes[size_idx(rng)];
+            void* next = s.vtable.reallocate(rec.ptr, new_size);
+            if (next) {
+                metrics_realloc(m, rec.size, new_size);
+                rec.ptr = next;
+                rec.size = new_size;
+                rec.id = id++;
+                rec.seed = static_cast<unsigned char>(id);
+                payload_write(rec.ptr, rec.size, rec.seed);
+            }
+        } else {
+            s.vtable.deallocate(rec.ptr);
+            metrics_free(m, rec.size, false);
+            rec = {};
+        }
+    }
+
+    for (PayloadRecord& rec : ptrs) {
+        if (rec.ptr) {
+            validation_check_record(cfg, m, rec);
+            s.vtable.deallocate(rec.ptr);
+            metrics_free(m, rec.size, false);
+            rec = {};
+        }
+    }
+}
+
+static void run_rss_decay_hold_phase(const StrategyDescriptor& s,
+                                     const BenchConfig& cfg,
+                                     GeneratedMetrics& m,
+                                     int ops,
+                                     int slots,
+                                     unsigned seed) {
+    int peak_objects = std::max(1024, slots * 4);
+    std::vector<PayloadRecord> ptrs(static_cast<size_t>(peak_objects));
+
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<int> size_dist(4096, 32768);
+
+    uint64_t id = 1;
+
+    // Phase 1: build a memory peak.
+    for (int i = 0; i < peak_objects; ++i) {
+        size_t size = static_cast<size_t>(size_dist(rng));
+        void* p = s.vtable.allocate(size);
+        payload_write(p, size, static_cast<unsigned char>(id));
+        ptrs[static_cast<size_t>(i)] = {p, size, id++, static_cast<unsigned char>(id)};
+        metrics_alloc(m, size);
+    }
+
+    // Phase 2: release 90% objects, leaving mapped/live pressure.
+    int release_count = peak_objects * 9 / 10;
+    for (int i = 0; i < release_count; ++i) {
+        PayloadRecord& rec = ptrs[static_cast<size_t>(i)];
+        validation_check_record(cfg, m, rec);
+        s.vtable.deallocate(rec.ptr);
+        metrics_free(m, rec.size, false);
+        rec = {};
+    }
+
+    // Phase 3: keep doing small activity while most memory should be reclaimed.
+    static constexpr size_t small_sizes[] = {64, 128, 256, 512};
+    for (int i = 0; i < ops; ++i) {
+        size_t size = small_sizes[i % 4];
+        void* p = s.vtable.allocate(size);
+        payload_write(p, size, static_cast<unsigned char>(id));
+        PayloadRecord rec{p, size, id++, static_cast<unsigned char>(id)};
+        metrics_alloc(m, size);
+
+        validation_check_record(cfg, m, rec);
+        s.vtable.deallocate(p);
+        metrics_free(m, size, false);
+    }
+
+    // Cleanup remaining 10%.
+    for (PayloadRecord& rec : ptrs) {
+        if (rec.ptr) {
+            validation_check_record(cfg, m, rec);
+            s.vtable.deallocate(rec.ptr);
+            metrics_free(m, rec.size, false);
+            rec = {};
+        }
+    }
+}
+
 static BenchResult generated_workload(const StrategyDescriptor& s,
                                       const BenchConfig& cfg) {
     std::string workload_name = cfg.workload_template;
@@ -1181,6 +1415,47 @@ static BenchResult generated_workload(const StrategyDescriptor& s,
                     break;
                 case GeneratedPhaseKind::LatencyLoop:
                     generated_latency_loop(s, ops, m, phase, static_cast<int>(i), static_cast<int>(phases.size()));
+                    break;
+                case GeneratedPhaseKind::TinyCacheChurn:
+                    run_tiny_cache_churn_phase(
+                        s,
+                        cfg,
+                        m,
+                        ops
+                    );
+                    break;
+
+                case GeneratedPhaseKind::RemoteDominant:
+                    run_remote_dominant_phase(
+                        s,
+                        cfg,
+                        m,
+                        ops,
+                        phase_threads,
+                        cfg.seed + static_cast<unsigned>(i)
+                    );
+                    break;
+
+                case GeneratedPhaseKind::MediumFragStrong:
+                    run_medium_frag_strong_phase(
+                        s,
+                        cfg,
+                        m,
+                        ops,
+                        phase_slots,
+                        cfg.seed + static_cast<unsigned>(i)
+                    );
+                    break;
+
+                case GeneratedPhaseKind::RssDecayHold:
+                    run_rss_decay_hold_phase(
+                        s,
+                        cfg,
+                        m,
+                        ops,
+                        phase_slots,
+                        cfg.seed + static_cast<unsigned>(i)
+                    );
                     break;
             }
         }

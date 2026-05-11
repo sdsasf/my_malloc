@@ -245,19 +245,20 @@ Current measured-label test metrics:
 
 | Metric | Value |
 |---|---:|
-| learned objective pairwise accuracy | 0.922 |
-| top-1 accuracy vs learned-cost best | 0.571 |
-| mean regret | 0.0525 |
+| learned objective pairwise accuracy | 0.943 |
+| top-1 accuracy vs learned-cost best | 0.643 |
+| mean regret | 0.0030 |
 | test workloads | 28 |
 | test examples | 196 |
 
 The post-training evaluation is stored in
 [adaptive_selector_model_results.md](adaptive_selector_model_results.md).
 On the current generated workload suite, `model` improves over the legacy rule
-selector's mean score, but the best fixed `large_object` baseline is still
-stronger overall. That result is useful: it proves the selector pipeline is now
-trained from measurements, and it shows where the next data/model improvements
-and mode implementations should focus.
+selector's mean score and wins the largest number of held-out workload cases.
+The best fixed `large_object` baseline still has the lowest mean score, which
+is useful residual evidence: fixed large-object behavior is still very strong
+on several generated traces, while model soft switching now wins many
+phase-changing and remote/mixed cases.
 
 ## Selector Backends
 

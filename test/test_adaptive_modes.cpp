@@ -163,14 +163,14 @@ static int fragmentation_stable_storage() {
     if (!p || hdr(p)->mode_id != AdaptiveModeId::FragmentationStable) {
         return fail("fragmentation-stable allocation failed");
     }
-    if (hdr(p)->storage != AdaptiveStorageId::DirectMap) {
-        return fail("fragmentation-stable mode did not isolate large medium allocation");
+    if (hdr(p)->storage != AdaptiveStorageId::Span) {
+        return fail("fragmentation-stable mode did not keep medium allocation in span storage");
     }
     my_ptmalloc::adaptive_free(p);
 
     void* q = my_ptmalloc::adaptive_malloc(1537);
-    if (!q || hdr(q)->storage != AdaptiveStorageId::DirectMap) {
-        return fail("fragmentation-stable mode did not isolate high-waste medium allocation");
+    if (!q || hdr(q)->storage != AdaptiveStorageId::Span) {
+        return fail("fragmentation-stable mode did not use span storage for mixed medium allocation");
     }
     my_ptmalloc::adaptive_free(q);
     return 0;

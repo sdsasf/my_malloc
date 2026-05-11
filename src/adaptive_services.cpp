@@ -45,6 +45,8 @@ constexpr size_t ADAPTIVE_TCACHE_SMALL_MAX = 64;
 constexpr size_t ADAPTIVE_TCACHE_MEDIUM_MAX = 16;
 constexpr size_t ADAPTIVE_REMOTE_QUEUE_BUCKETS = 256;
 constexpr size_t ADAPTIVE_REMOTE_DRAIN_LIMIT = 64;
+constexpr size_t ADAPTIVE_LARGE_EXTENT_CACHE_LIMIT = 8;
+constexpr size_t ADAPTIVE_LARGE_EXTENT_CACHE_MAX = 2 * 1024 * 1024;
 constexpr size_t ADAPTIVE_DEBUG_REDZONE_SIZE = 16;
 constexpr uint64_t ADAPTIVE_DEBUG_CANARY = 0xA6D4'BEEF'51E7'CAFEull;
 constexpr size_t ADAPTIVE_PAGE_TABLE_SIZE = 262144;
@@ -67,6 +69,12 @@ struct RemoteQueueBucket {
     AdaptiveHeader* head = nullptr;
 };
 
+struct ExtentCache {
+    std::mutex mutex;
+    AdaptiveHeader* head = nullptr;
+    size_t count = 0;
+};
+
 std::mutex g_registry_mutex;
 AdaptiveHeader* g_registry_head = nullptr;
 std::mutex g_small_mutexes[ADAPTIVE_SMALL_CLASS_COUNT];
@@ -74,7 +82,9 @@ std::mutex g_medium_mutexes[ADAPTIVE_MEDIUM_CLASS_COUNT];
 AdaptivePage* g_small_pages[ADAPTIVE_SMALL_CLASS_COUNT]{};
 AdaptivePage* g_medium_pages[ADAPTIVE_MEDIUM_CLASS_COUNT]{};
 std::atomic<uintptr_t> g_page_table[ADAPTIVE_PAGE_TABLE_SIZE]{};
+std::atomic<uint64_t> g_remote_pending{0};
 RemoteQueueBucket g_remote_queues[ADAPTIVE_REMOTE_QUEUE_BUCKETS];
+ExtentCache g_large_extent_cache;
 thread_local AdaptiveThreadCache t_thread_cache;
 
 static void* user_from_header(AdaptiveHeader* hdr) noexcept {
@@ -277,23 +287,16 @@ static TCacheBin* tcache_bin_for(AdaptiveStorageId storage, size_t class_index) 
     return nullptr;
 }
 
-static uint16_t tcache_limit_for(AdaptiveStorageId storage, AdaptiveModeId mode) noexcept {
-    if (mode == AdaptiveModeId::DeterministicLatency) {
-        if (storage == AdaptiveStorageId::SizeClass) return 8;
-        if (storage == AdaptiveStorageId::Span) return 4;
-        return 0;
+static uint16_t tcache_limit_for(AdaptiveStorageId storage,
+                                 uint32_t small_limit,
+                                 uint32_t medium_limit) noexcept {
+    uint32_t limit = 0;
+    if (storage == AdaptiveStorageId::SizeClass) {
+        limit = small_limit;
+    } else if (storage == AdaptiveStorageId::Span) {
+        limit = medium_limit;
     }
-    if (mode == AdaptiveModeId::CrossThreadMessage) {
-        if (storage == AdaptiveStorageId::SizeClass) return 32;
-        if (storage == AdaptiveStorageId::Span) return 8;
-        return 0;
-    }
-    if (mode == AdaptiveModeId::ThroughputCache) {
-        if (storage == AdaptiveStorageId::SizeClass) return ADAPTIVE_TCACHE_SMALL_MAX;
-        if (storage == AdaptiveStorageId::Span) return ADAPTIVE_TCACHE_MEDIUM_MAX;
-        return 0;
-    }
-    return 0;
+    return limit > UINT16_MAX ? UINT16_MAX : static_cast<uint16_t>(limit);
 }
 
 static size_t remote_bucket_index(uint64_t owner_thread) noexcept {
@@ -301,12 +304,14 @@ static size_t remote_bucket_index(uint64_t owner_thread) noexcept {
         ADAPTIVE_REMOTE_QUEUE_BUCKETS;
 }
 
-static bool push_tcache(AdaptiveHeader* hdr) noexcept {
+static bool push_tcache(AdaptiveHeader* hdr,
+                        uint32_t small_limit,
+                        uint32_t medium_limit) noexcept {
     if (!hdr || !(hdr->flags & ADAPTIVE_FLAG_POOLED) || !hdr->owner_page) return false;
     AdaptiveStorageId storage = hdr->owner_page->storage;
     size_t class_index = hdr->owner_page->class_index;
     TCacheBin* bin = tcache_bin_for(storage, class_index);
-    if (!bin || bin->count >= tcache_limit_for(storage, hdr->mode_id)) return false;
+    if (!bin || bin->count >= tcache_limit_for(storage, small_limit, medium_limit)) return false;
     hdr->magic = 0;
     hdr->requested = 0;
     hdr->owner_thread = 0;
@@ -328,6 +333,28 @@ static AdaptiveHeader* pop_tcache(AdaptiveStorageId storage, size_t class_index)
     return hdr;
 }
 
+static void refill_tcache_locked(AdaptivePage* page,
+                                 AdaptiveStorageId storage,
+                                 size_t class_index,
+                                 const AllocationRequest& req) noexcept {
+    if (!page || !req.prefer_thread_cache || req.batch_size <= 1) return;
+    TCacheBin* bin = tcache_bin_for(storage, class_index);
+    uint16_t limit = tcache_limit_for(storage, req.tcache_small_limit, req.tcache_medium_limit);
+    if (!bin || limit == 0) return;
+    uint32_t moved = 0;
+    while (page->free_list && bin->count < limit && moved + 1 < req.batch_size) {
+        AdaptiveHeader* hdr = page->free_list;
+        page->free_list = hdr->registry_next;
+        hdr->registry_next = bin->head;
+        hdr->registry_prev = nullptr;
+        hdr->owner_thread = 0;
+        bin->head = hdr;
+        bin->count++;
+        page->live_count++;
+        moved++;
+    }
+}
+
 static bool enqueue_remote_free(AdaptiveHeader* hdr) noexcept {
     if (!hdr || !(hdr->flags & ADAPTIVE_FLAG_POOLED)) return false;
     size_t start = remote_bucket_index(hdr->owner_thread);
@@ -341,13 +368,16 @@ static bool enqueue_remote_free(AdaptiveHeader* hdr) noexcept {
             hdr->registry_prev = nullptr;
             hdr->registry_next = bucket.head;
             bucket.head = hdr;
+            g_remote_pending.fetch_add(1, std::memory_order_relaxed);
             return true;
         }
     }
     return false;
 }
 
-static void drain_remote_frees_for(uint64_t owner_thread) noexcept {
+static void drain_remote_frees_for(uint64_t owner_thread,
+                                   uint32_t small_limit,
+                                   uint32_t medium_limit) noexcept {
     if (owner_thread == 0) return;
     size_t start = remote_bucket_index(owner_thread);
     for (size_t probe = 0; probe < ADAPTIVE_REMOTE_QUEUE_BUCKETS; ++probe) {
@@ -364,9 +394,13 @@ static void drain_remote_frees_for(uint64_t owner_thread) noexcept {
             AdaptiveHeader* next = list->registry_next;
             AdaptiveHeader* current = list;
             current->registry_next = nullptr;
-            if (!push_tcache(current)) {
+            if (!push_tcache(current, small_limit, medium_limit)) {
                 current->registry_next = next;
                 break;
+            }
+            uint64_t pending = g_remote_pending.load(std::memory_order_relaxed);
+            if (pending > 0) {
+                g_remote_pending.fetch_sub(1, std::memory_order_relaxed);
             }
             list = next;
             drained++;
@@ -517,6 +551,26 @@ static void release_empty_locked(AdaptiveStorageId storage, AdaptivePage** head,
     }
 }
 
+static AdaptivePage* select_pool_page_locked(AdaptivePage* head,
+                                             const AllocationRequest& req) noexcept {
+    AdaptivePage* selected = nullptr;
+    if (!req.prefer_occupancy_packing) {
+        for (AdaptivePage* page = head; page; page = page->next) {
+            if (page->free_list) return page;
+        }
+        return nullptr;
+    }
+    uint32_t best_live = 0;
+    for (AdaptivePage* page = head; page; page = page->next) {
+        if (!page->free_list) continue;
+        if (!selected || page->live_count > best_live) {
+            selected = page;
+            best_live = page->live_count;
+        }
+    }
+    return selected;
+}
+
 static AllocationResult fail_result() noexcept {
     return AllocationResult{};
 }
@@ -525,6 +579,9 @@ static AdaptiveStorageId auto_storage_for(const AllocationRequest& req) noexcept
     if (req.alignment > 16 || req.prefer_direct_map) return AdaptiveStorageId::DirectMap;
     if (req.size <= ADAPTIVE_SMALL_MAX) return AdaptiveStorageId::SizeClass;
     if (req.size <= ADAPTIVE_MEDIUM_MAX) return AdaptiveStorageId::Span;
+    if (req.direct_map_threshold != 0 && req.size < req.direct_map_threshold) {
+        return AdaptiveStorageId::DirectMap;
+    }
     return AdaptiveStorageId::DirectMap;
 }
 
@@ -547,7 +604,10 @@ AllocationResult MemoryServices::allocate_size_class(const AllocationRequest& re
     AdaptiveRuntimeConfig cfg = adaptive_runtime_config();
 
     if (req.prefer_thread_cache) {
-        drain_remote_frees_for(req.thread_id);
+        if (req.drain_remote_queue &&
+            g_remote_pending.load(std::memory_order_relaxed) > 0) {
+            drain_remote_frees_for(req.thread_id, req.tcache_small_limit, req.tcache_medium_limit);
+        }
         if (AdaptiveHeader* cached = pop_tcache(AdaptiveStorageId::SizeClass, class_index)) {
             finalize_pooled_header(cached, req, AdaptiveStorageId::SizeClass, usable,
                                    cached->mapped_size, cached->owner_page);
@@ -555,6 +615,17 @@ AllocationResult MemoryServices::allocate_size_class(const AllocationRequest& re
             return AllocationResult{user_from_header(cached), cached, AdaptiveStorageId::SizeClass,
                                     req.size, usable, cached->mapped_size, 0,
                                     true, false, false};
+        }
+        if (req.drain_remote_queue) {
+            drain_remote_frees_for(req.thread_id, req.tcache_small_limit, req.tcache_medium_limit);
+            if (AdaptiveHeader* cached = pop_tcache(AdaptiveStorageId::SizeClass, class_index)) {
+                finalize_pooled_header(cached, req, AdaptiveStorageId::SizeClass, usable,
+                                       cached->mapped_size, cached->owner_page);
+                registry_insert(cached);
+                return AllocationResult{user_from_header(cached), cached, AdaptiveStorageId::SizeClass,
+                                        req.size, usable, cached->mapped_size, 0,
+                                        true, false, false};
+            }
         }
     }
 
@@ -567,8 +638,7 @@ AllocationResult MemoryServices::allocate_size_class(const AllocationRequest& re
     if (!head || !mutex) return fail_result();
     {
         std::lock_guard<std::mutex> lock(*mutex);
-        AdaptivePage* page = *head;
-        while (page && !page->free_list) page = page->next;
+        AdaptivePage* page = select_pool_page_locked(*head, req);
         if (!page) {
             from_cache = false;
             slow_path = true;
@@ -581,6 +651,7 @@ AllocationResult MemoryServices::allocate_size_class(const AllocationRequest& re
         hdr = page->free_list;
         page->free_list = hdr->registry_next;
         page->live_count++;
+        refill_tcache_locked(page, AdaptiveStorageId::SizeClass, class_index, req);
         finalize_pooled_header(hdr, req, AdaptiveStorageId::SizeClass, usable,
                                page->mapped_size, page);
     }
@@ -600,7 +671,10 @@ AllocationResult MemoryServices::allocate_span(const AllocationRequest& req) noe
     AdaptiveRuntimeConfig cfg = adaptive_runtime_config();
 
     if (req.prefer_thread_cache) {
-        drain_remote_frees_for(req.thread_id);
+        if (req.drain_remote_queue &&
+            g_remote_pending.load(std::memory_order_relaxed) > 0) {
+            drain_remote_frees_for(req.thread_id, req.tcache_small_limit, req.tcache_medium_limit);
+        }
         if (AdaptiveHeader* cached = pop_tcache(AdaptiveStorageId::Span, class_index)) {
             finalize_pooled_header(cached, req, AdaptiveStorageId::Span, usable,
                                    cached->mapped_size, cached->owner_page);
@@ -608,6 +682,17 @@ AllocationResult MemoryServices::allocate_span(const AllocationRequest& req) noe
             return AllocationResult{user_from_header(cached), cached, AdaptiveStorageId::Span,
                                     req.size, usable, cached->mapped_size, 0,
                                     true, false, false};
+        }
+        if (req.drain_remote_queue) {
+            drain_remote_frees_for(req.thread_id, req.tcache_small_limit, req.tcache_medium_limit);
+            if (AdaptiveHeader* cached = pop_tcache(AdaptiveStorageId::Span, class_index)) {
+                finalize_pooled_header(cached, req, AdaptiveStorageId::Span, usable,
+                                       cached->mapped_size, cached->owner_page);
+                registry_insert(cached);
+                return AllocationResult{user_from_header(cached), cached, AdaptiveStorageId::Span,
+                                        req.size, usable, cached->mapped_size, 0,
+                                        true, false, false};
+            }
         }
     }
 
@@ -620,8 +705,7 @@ AllocationResult MemoryServices::allocate_span(const AllocationRequest& req) noe
     if (!head || !mutex) return fail_result();
     {
         std::lock_guard<std::mutex> lock(*mutex);
-        AdaptivePage* page = *head;
-        while (page && !page->free_list) page = page->next;
+        AdaptivePage* page = select_pool_page_locked(*head, req);
         if (!page) {
             from_cache = false;
             slow_path = true;
@@ -634,6 +718,7 @@ AllocationResult MemoryServices::allocate_span(const AllocationRequest& req) noe
         hdr = page->free_list;
         page->free_list = hdr->registry_next;
         page->live_count++;
+        refill_tcache_locked(page, AdaptiveStorageId::Span, class_index, req);
         finalize_pooled_header(hdr, req, AdaptiveStorageId::Span, usable,
                                page->mapped_size, page);
     }
@@ -645,6 +730,42 @@ AllocationResult MemoryServices::allocate_span(const AllocationRequest& req) noe
 
 AllocationResult MemoryServices::allocate_extent(const AllocationRequest& req) noexcept {
     return allocate_direct_map(req);
+}
+
+static AdaptiveHeader* pop_large_extent_cache(size_t mapped_needed) noexcept {
+    if (mapped_needed == 0 || mapped_needed > ADAPTIVE_LARGE_EXTENT_CACHE_MAX) return nullptr;
+    std::lock_guard<std::mutex> lock(g_large_extent_cache.mutex);
+    AdaptiveHeader* prev = nullptr;
+    AdaptiveHeader* hdr = g_large_extent_cache.head;
+    while (hdr) {
+        AdaptiveHeader* next = hdr->registry_next;
+        if (hdr->mapped_size >= mapped_needed && hdr->mapped_size <= mapped_needed * 2) {
+            if (prev) prev->registry_next = next;
+            else g_large_extent_cache.head = next;
+            g_large_extent_cache.count--;
+            hdr->registry_next = nullptr;
+            hdr->registry_prev = nullptr;
+            return hdr;
+        }
+        prev = hdr;
+        hdr = next;
+    }
+    return nullptr;
+}
+
+static bool push_large_extent_cache(AdaptiveHeader* hdr) noexcept {
+    if (!hdr || hdr->storage != AdaptiveStorageId::DirectMap) return false;
+    if (hdr->mapped_size == 0 || hdr->mapped_size > ADAPTIVE_LARGE_EXTENT_CACHE_MAX) return false;
+    std::lock_guard<std::mutex> lock(g_large_extent_cache.mutex);
+    if (g_large_extent_cache.count >= ADAPTIVE_LARGE_EXTENT_CACHE_LIMIT) return false;
+    hdr->magic = 0;
+    hdr->requested = 0;
+    hdr->owner_thread = 0;
+    hdr->registry_prev = nullptr;
+    hdr->registry_next = g_large_extent_cache.head;
+    g_large_extent_cache.head = hdr;
+    g_large_extent_cache.count++;
+    return true;
 }
 
 AllocationResult MemoryServices::allocate_direct_map(const AllocationRequest& req) noexcept {
@@ -662,6 +783,28 @@ AllocationResult MemoryServices::allocate_direct_map(const AllocationRequest& re
     constexpr size_t page_size = 4096;
     if (total > static_cast<size_t>(-1) - (page_size - 1)) return fail_result();
     size_t mapped = (total + page_size - 1) & ~(page_size - 1);
+    if (req.mode == AdaptiveModeId::LargeObjectStreaming && alignment <= 16) {
+        if (AdaptiveHeader* cached = pop_large_extent_cache(mapped)) {
+            cached->magic = ADAPTIVE_MAGIC;
+            cached->storage = AdaptiveStorageId::DirectMap;
+            cached->mode_id = req.mode;
+            cached->flags = 0;
+            cached->_pad = 0;
+            cached->config_version = adaptive_runtime_config().version;
+            cached->requested = req.size;
+            cached->usable = usable;
+            cached->registry_prev = nullptr;
+            cached->registry_next = nullptr;
+            cached->owner_page = nullptr;
+            cached->owner_thread = req.thread_id;
+            cached->alloc_epoch = adaptive_next_alloc_epoch();
+            cached->debug_cookie = 0;
+            registry_insert(cached);
+            return AllocationResult{user_from_header(cached), cached, AdaptiveStorageId::DirectMap,
+                                    req.size, usable, cached->mapped_size, 0,
+                                    true, false, false};
+        }
+    }
     void* region = mmap(nullptr, mapped, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (region == MAP_FAILED) return fail_result();
     register_region(region, mapped);
@@ -704,7 +847,7 @@ void MemoryServices::deallocate(AdaptiveHeader* hdr, const ReleaseDecision& deci
         std::mutex* mutex = pool_mutex_for(storage, class_index);
         if (!head || !mutex) return;
         bool remote_free = hdr->owner_thread != adaptive_thread_token();
-        bool use_remote_queue = hdr->mode_id == AdaptiveModeId::CrossThreadMessage && remote_free;
+        bool use_remote_queue = decision.use_remote_queue && remote_free;
         bool use_tcache = decision.action == ReleaseAction::Cache && !remote_free;
         registry_remove(hdr);
         if (decision.check_redzone && !validate_debug_guards(hdr)) {
@@ -716,7 +859,7 @@ void MemoryServices::deallocate(AdaptiveHeader* hdr, const ReleaseDecision& deci
         if (use_remote_queue && enqueue_remote_free(hdr)) {
             return;
         }
-        if (use_tcache && push_tcache(hdr)) {
+        if (use_tcache && push_tcache(hdr, decision.tcache_small_limit, decision.tcache_medium_limit)) {
             return;
         }
         std::lock_guard<std::mutex> lock(*mutex);
@@ -732,8 +875,7 @@ void MemoryServices::deallocate(AdaptiveHeader* hdr, const ReleaseDecision& deci
             return;
         }
         uint32_t keep = decision.action == ReleaseAction::Purge ||
-                        decision.action == ReleaseAction::Unmap ? 0 : adaptive_runtime_config().empty_cache_limit;
-        if (decision.action == ReleaseAction::Cache) keep = adaptive_runtime_config().empty_cache_limit;
+                        decision.action == ReleaseAction::Unmap ? 0 : decision.empty_keep_limit;
         release_empty_locked(storage, head, keep);
         return;
     }
@@ -754,6 +896,11 @@ void MemoryServices::deallocate(AdaptiveHeader* hdr, const ReleaseDecision& deci
         // stay visible to adaptive diagnostics instead of another allocator.
         return;
     }
+    if (decision.action == ReleaseAction::Cache &&
+        mode == AdaptiveModeId::LargeObjectStreaming &&
+        push_large_extent_cache(hdr)) {
+        return;
+    }
     adaptive_telemetry_on_unmapped(mode, mapped);
     unregister_region(base, mapped);
     munmap(base, mapped);
@@ -770,7 +917,10 @@ void* MemoryServices::reallocate(AdaptiveHeader* hdr, size_t new_size) noexcept 
                           plan.use_thread_cache, plan.prefer_direct_map,
                           plan.prefer_reuse, plan.prefer_low_rss,
                           plan.debug_redzone, plan.debug_quarantine,
-                          plan.batch_size, plan.empty_keep_limit};
+                          plan.drain_remote_queue, plan.prefer_occupancy_packing,
+                          plan.batch_size, plan.empty_keep_limit,
+                          plan.tcache_small_limit, plan.tcache_medium_limit,
+                          plan.direct_map_threshold};
     AllocationResult result{};
     switch (plan.storage) {
         case StoragePreference::SizeClass: result = allocate_size_class(req); break;

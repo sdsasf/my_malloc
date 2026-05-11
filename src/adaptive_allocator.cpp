@@ -30,8 +30,13 @@ static AllocationRequest request_from_plan(size_t size,
         plan.prefer_low_rss,
         plan.debug_redzone,
         plan.debug_quarantine,
+        plan.drain_remote_queue,
+        plan.prefer_occupancy_packing,
         plan.batch_size,
         plan.empty_keep_limit,
+        plan.tcache_small_limit,
+        plan.tcache_medium_limit,
+        plan.direct_map_threshold,
     };
 }
 
