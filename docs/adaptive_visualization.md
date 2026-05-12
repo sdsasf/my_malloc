@@ -150,7 +150,7 @@ The server binds only to `127.0.0.1`.
   },
   "selector_last_window": {
     "selector_backend": "model",
-    "reason": "large_bytes_ratio",
+    "reason": "model_cost",
     "model_candidate": "large_object",
     "model_confidence": 0.42,
     "large_bytes_ratio": 0.91,
@@ -166,10 +166,12 @@ The server binds only to `127.0.0.1`.
       "selector_backend": "model",
       "model_candidate": "large_object",
       "model_confidence": 0.42,
-      "reason": "large_bytes_ratio"
+      "reason": "model_cost"
     }
   ]
 }
 ```
 
-The `adaptive` object is omitted for non-adaptive strategies.
+The `adaptive` object is omitted for non-adaptive strategies. In this payload,
+`large_bytes_ratio` means the fraction of requested bytes in the true
+streaming-large request buckets above 256 KiB.

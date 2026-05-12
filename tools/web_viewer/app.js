@@ -8,7 +8,7 @@ const modes = [
   ['compact_rss', 'compact'],
   ['fragmentation_stable', 'fragment'],
   ['cross_thread', 'x-thread'],
-  ['large_object', 'large'],
+  ['large_object', 'large stream'],
   ['hardened_debug', 'debug']
 ];
 let lastMode = '';
@@ -71,18 +71,88 @@ function featureValue(e, key) {
   return Math.max(0, Number((e && e[key]) || 0));
 }
 
+const featureDefs = [
+  {
+    key: 'large_bytes_ratio',
+    label: 'stream-large >256 KiB',
+    short: 'stream-large',
+    max: 1,
+    severity: v => v / 0.55
+  },
+  {
+    key: 'remote_free_ratio',
+    label: 'remote free',
+    short: 'remote free',
+    max: 1,
+    severity: v => v / 0.25
+  },
+  {
+    key: 'mapped_live_ratio',
+    label: 'mapped/live pressure',
+    short: 'mapped/live',
+    max: 4096,
+    scale: 'log',
+    severity: v => Math.log1p(v) / Math.log1p(1024)
+  },
+  {
+    key: 'slow_path_ratio',
+    label: 'slow path',
+    short: 'slow path',
+    max: 1,
+    severity: v => v / 0.45
+  },
+  {
+    key: 'fragmentation_estimate',
+    label: 'fragmentation',
+    short: 'fragmentation',
+    max: 1,
+    severity: v => v / 0.25
+  },
+  {
+    key: 'cache_hit_rate',
+    label: 'cache hit',
+    short: 'cache hit',
+    max: 1,
+    severity: v => v
+  }
+];
+
+function featureByReason(reason) {
+  const map = {
+    large_bytes_ratio: 'large_bytes_ratio',
+    remote_free_ratio: 'remote_free_ratio',
+    mapped_live_ratio: 'mapped_live_ratio',
+    slow_path_ratio: 'slow_path_ratio',
+    fragmentation: 'fragmentation_estimate',
+    cache_reuse: 'cache_hit_rate'
+  };
+  const key = map[reason];
+  return featureDefs.find(f => f.key === key);
+}
+
+function dominantFeature(e) {
+  let best = null;
+  for (const def of featureDefs) {
+    const value = featureValue(e, def.key);
+    const score = Math.max(0, def.severity(value));
+    if (!best || score > best.score) best = { def, value, score };
+  }
+  return best;
+}
+
 function importantValue(e) {
   if (!e) return '';
-  const map = {
-    large_bytes_ratio: ['large bytes', e.large_bytes_ratio],
-    remote_free_ratio: ['remote free', e.remote_free_ratio],
-    mapped_live_ratio: ['mapped/live', e.mapped_live_ratio],
-    slow_path_ratio: ['slow path', e.slow_path_ratio],
-    fragmentation: ['fragmentation', e.fragmentation_estimate],
-    cache_reuse: ['cache hit', e.cache_hit_rate]
-  };
-  const row = map[e.reason] || ['mapped/live', e.mapped_live_ratio];
-  return `${row[0]} ${fmt(row[1])}`;
+  const reasonDef = featureByReason(e.reason);
+  if (reasonDef) return `${reasonDef.short} ${fmt(featureValue(e, reasonDef.key))}`;
+  const top = dominantFeature(e);
+  return top ? `${top.def.short} ${fmt(top.value)}` : '';
+}
+
+function featureBarPct(def, value) {
+  if (def.scale === 'log') {
+    return Math.max(0, Math.min(100, Math.log1p(value) / Math.log1p(def.max) * 100));
+  }
+  return Math.max(0, Math.min(100, value / def.max * 100));
 }
 
 function niceRange(values) {
@@ -186,9 +256,11 @@ function renderTimeline(events) {
     const baseline = e.selector_backend === 'rule' && e.rule_candidate
       ? `rule ${e.rule_candidate}`
       : '';
+    const top = dominantFeature(e);
+    const signal = top ? `${top.def.short} ${fmt(top.value)}` : 'no signal';
     return `<div class="event ${e.switched ? 'switched' : ''}">
       <div class="event-title">${title}</div>
-      <div class="event-reason">${backend} | reason ${fmt(e.reason)}</div>
+      <div class="event-reason">${backend} | ${fmt(e.reason)} | ${signal}</div>
       <div class="event-reason">${baseline ? baseline + ' | ' : ''}${model}</div>
       <div class="event-value">${importantValue(e)}</div>
     </div>`;
@@ -205,18 +277,15 @@ function renderDecision(e) {
   const modelPart = e.model_candidate
     ? ` | model ${e.model_candidate}, confidence ${fmt(e.model_confidence)}`
     : '';
+  const top = dominantFeature(e);
+  const signalPart = top ? ` | dominant ${top.def.short} ${fmt(top.value)}` : '';
   document.getElementById('decisionSummary').textContent =
-    `${title} because ${e.reason} (${backend})${modelPart}`;
-  const features = [
-    ['large bytes', featureValue(e, 'large_bytes_ratio'), 1],
-    ['remote free', featureValue(e, 'remote_free_ratio'), 1],
-    ['mapped/live', featureValue(e, 'mapped_live_ratio'), 12],
-    ['slow path', featureValue(e, 'slow_path_ratio'), 1],
-    ['fragmentation', featureValue(e, 'fragmentation_estimate'), 1]
-  ];
-  document.getElementById('featureBars').innerHTML = features.map(([name, value, max]) => {
-    const pct = Math.max(0, Math.min(100, value / max * 100));
-    return `<div class="feature-row"><span>${name}</span><div class="feature-track"><div class="feature-fill" style="width:${pct}%"></div></div><span>${fmt(value)}</span></div>`;
+    `${title} because ${e.reason} (${backend})${modelPart}${signalPart}`;
+  document.getElementById('featureBars').innerHTML = featureDefs.slice(0, 5).map(def => {
+    const value = featureValue(e, def.key);
+    const pct = featureBarPct(def, value);
+    const scale = def.scale === 'log' ? ' log' : '';
+    return `<div class="feature-row"><span>${def.label}</span><div class="feature-track" title="${def.label}${scale}"><div class="feature-fill" style="width:${pct}%"></div></div><span>${fmt(value)}</span></div>`;
   }).join('');
 }
 
@@ -278,7 +347,7 @@ async function poll() {
       ['validation checks', g.validation_checks || 0]
     ]);
     document.getElementById('adaptiveTable').innerHTML = rows([
-      ['large bytes ratio', a.large_bytes_ratio],
+      ['stream-large >256 KiB', a.large_bytes_ratio],
       ['remote free ratio', a.remote_free_ratio],
       ['fragmentation', a.fragmentation_estimate],
       ['slow path ratio', a.slow_path_ratio],
