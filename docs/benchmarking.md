@@ -208,6 +208,10 @@ python3 tools/train_selector_model.py \
   --summary-out models/selector_training_summary.json
 ```
 
+Full selector datasets and raw evaluation JSON outputs are local generated
+artifacts and are ignored by Git. Keep only the compact generated model,
+training summary, and curated Markdown result summary in the repository.
+
 The generated model is intentionally compact: online inference evaluates all
 eight modes only at selector window boundaries and keeps the allocator hot path
 unchanged.

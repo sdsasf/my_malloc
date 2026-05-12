@@ -26,6 +26,13 @@ core.*
 *.log
 benchmark-*.txt
 
+# Locally generated adaptive selector training artifacts.
+# The compact generated C++ model and small summary can be checked in, but full
+# benchmark datasets are reproducible outputs and should not be committed.
+models/selector_training_dataset.json
+models/selector_evaluation_results.json
+docs/adaptive_selector_training_dataset.md
+
 # Editor/OS files
 .DS_Store
 *.swp

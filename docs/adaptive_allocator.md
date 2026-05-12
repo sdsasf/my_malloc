@@ -146,6 +146,10 @@ python3 tools/train_selector_model.py \
   --summary-out models/selector_training_summary.json
 ```
 
+The large JSON files under `models/` are reproducible local artifacts and are
+ignored by Git. The repository keeps the compact generated selector header and
+the small training summary instead.
+
 The training script does not contain a hand-written mode oracle. It reads real
 benchmark measurements from `evaluate_selector_model.py`, learns objective
 weights from pairwise fixed-mode outcomes, derives per-mode cost labels from

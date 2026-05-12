@@ -188,6 +188,12 @@ python3 tools/train_selector_model.py \
   --summary-out models/selector_training_summary.json
 ```
 
+The full JSON dataset and evaluation result files are local generated
+artifacts. They are intentionally ignored by Git because they can be
+regenerated from the commands above and otherwise add large, noisy diffs. The
+checked-in training state is the compact generated header plus the small
+summary JSON.
+
 Pipeline:
 
 ```mermaid
@@ -241,7 +247,7 @@ Training also uses two regularizers and one leakage guard:
 The checked-in model is generated from:
 
 ```text
-dataset: models/selector_training_dataset.json
+dataset: local models/selector_training_dataset.json, ignored by Git
 benchmark seeds: 10001..10020
 training examples: 980
 train examples: 784
@@ -254,7 +260,8 @@ mode_prior_shrink: 0.75
 objective_regularization: 0.04
 ```
 
-The summary is stored in `models/selector_training_summary.json`.
+The summary is stored in `models/selector_training_summary.json`. The complete
+training dataset and post-training raw evaluation JSON are not checked in.
 
 Current measured-label test metrics:
 
