@@ -12,6 +12,7 @@ const modes = [
   ['hardened_debug', 'debug']
 ];
 let lastMode = '';
+const modeIndex = Object.fromEntries(modes.map(([id], i) => [id, i]));
 
 const icons = {
   pulse: '<svg viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 13 3-7h5"/></svg>',
@@ -56,6 +57,19 @@ function fmt(n) {
   return Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+function bytes(n) {
+  const value = Number(n || 0);
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
+  let v = Math.abs(value);
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  const signed = value < 0 ? -v : v;
+  return `${signed.toLocaleString(undefined, { maximumFractionDigits: i ? 1 : 0 })} ${units[i]}`;
+}
+
 function missionTime(ms) {
   const total = Math.max(0, Number(ms || 0) / 1000);
   const min = Math.floor(total / 60);
@@ -66,6 +80,83 @@ function missionTime(ms) {
 function rows(items) {
   return items.map(x => `<tr><td>${x[0]}</td><td>${fmt(x[1])}</td></tr>`).join('');
 }
+
+function numericArray(value, count) {
+  const out = Array.isArray(value) ? value.slice(0, count) : [];
+  while (out.length < count) out.push(0);
+  return out.map(v => Number(v || 0));
+}
+
+function sum(values) {
+  return values.reduce((acc, v) => acc + Number(v || 0), 0);
+}
+
+function pct(value, max = 1) {
+  if (max <= 0) return 0;
+  return Math.max(0, Math.min(100, Number(value || 0) / max * 100));
+}
+
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
+
+function setMeter(id, percent) {
+  const el = document.getElementById(id);
+  if (el) el.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+}
+
+function setNodeState(id, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle('active', state === 'active');
+  el.classList.toggle('hot', state === 'hot');
+  el.classList.toggle('warn', state === 'warn');
+  el.classList.toggle('alert', state === 'alert');
+}
+
+const policyProfiles = {
+  balanced: {
+    intent: 'auto substrate with moderate reuse',
+    release: 'cache / central pool',
+    chips: ['auto', 'reuse', 'soft reclaim']
+  },
+  throughput_cache: {
+    intent: 'reuse-first TLS magazines and larger batches',
+    release: 'cache',
+    chips: ['tcache', 'large batch', 'high retain']
+  },
+  deterministic_latency: {
+    intent: 'stable reuse with bounded maintenance',
+    release: 'cache / delayed purge',
+    chips: ['stable batch', 'low jitter', 'no hot purge']
+  },
+  compact_rss: {
+    intent: 'low RSS with aggressive reclaim',
+    release: 'purge / unmap',
+    chips: ['low rss', 'empty keep 0', 'unmap']
+  },
+  fragmentation_stable: {
+    intent: 'occupancy packing for mixed sizes',
+    release: 'central pool / purge',
+    chips: ['pack spans', 'fit classes', 'low waste']
+  },
+  cross_thread: {
+    intent: 'owner-aware remote-free routing',
+    release: 'remote queue / owner drain',
+    chips: ['owner id', 'remote queue', 'drain']
+  },
+  large_object: {
+    intent: 'true-large isolation through direct maps',
+    release: 'unmap direct regions',
+    chips: ['>256 KiB', 'direct map', 'no pool pollution']
+  },
+  hardened_debug: {
+    intent: 'debug metadata, poison, redzone, quarantine',
+    release: 'quarantine / unmap',
+    chips: ['canary', 'redzone', 'poison']
+  }
+};
 
 function featureValue(e, key) {
   return Math.max(0, Number((e && e[key]) || 0));
@@ -289,6 +380,107 @@ function renderDecision(e) {
   }).join('');
 }
 
+function renderInternalMap(a, w, lastEvent) {
+  const adaptiveOnline = !!(a && a.current_mode);
+  const current = adaptiveOnline ? a.current_mode : 'n/a';
+  const profile = policyProfiles[current] || {
+    intent: adaptiveOnline ? 'custom mode policy' : 'non-adaptive strategy',
+    release: adaptiveOnline ? 'mode release decision' : 'strategy-owned free path',
+    chips: adaptiveOnline ? ['policy', 'shared substrate'] : ['viewer only']
+  };
+  const storageAlloc = numericArray(a.storage_allocs, 3);
+  const storageFree = numericArray(a.storage_frees, 3);
+  const storageRequested = numericArray(a.storage_requested_bytes, 3);
+  const storageUsable = numericArray(a.storage_usable_bytes, 3);
+  const poolHits = numericArray(a.pool_hits, 3);
+  const poolMisses = numericArray(a.pool_misses, 3);
+  const modeAlloc = numericArray(a.mode_alloc_count, modes.length);
+  const modeLive = numericArray(a.mode_live_bytes, modes.length);
+  const totalStorageAlloc = Math.max(1, sum(storageAlloc));
+  const totalPool = sum(poolHits) + sum(poolMisses);
+  const hitRate = totalPool ? sum(poolHits) / totalPool : 0;
+  const activeIdx = modeIndex[current] ?? -1;
+  const activeModeAllocs = activeIdx >= 0 ? modeAlloc[activeIdx] : 0;
+  const activeModeLive = activeIdx >= 0 ? modeLive[activeIdx] : 0;
+  const remoteRatio = Number(a.remote_free_ratio || 0);
+  const releasedBytes = Number(a.release_unmapped_bytes || 0);
+  const mappedBytes = Number(a.mapped_bytes || 0);
+  const safetyErrors = Number(a.invalid_free_count || 0)
+    + Number(a.double_free_count || 0)
+    + Number(a.header_corruption_count || 0);
+  const selectorConfidence = lastEvent ? Number(lastEvent.model_confidence || 0) : 0;
+  const releasePressure = releasedBytes + mappedBytes > 0
+    ? releasedBytes / (releasedBytes + mappedBytes)
+    : 0;
+
+  const chipHtml = profile.chips
+    .map(chip => `<span class="node-chip on">${chip}</span>`)
+    .join('');
+
+  setText('substrateHealth', adaptiveOnline ? 'adaptive substrate online' : 'generic workload view');
+  document.getElementById('substrateHealth').classList.toggle('hot', adaptiveOnline);
+  setText('apiFlow', `${fmt(w.ops || 0)} ops | ${fmt(w.allocs || 0)} allocs`);
+  setText('headerFlow', adaptiveOnline
+    ? `mode_id ${current} | live ${fmt(w.live_objects || 0)}`
+    : 'strategy-owned metadata');
+  setText('policyMode', current);
+  setText('policyIntent', profile.intent);
+  document.getElementById('policyChips').innerHTML = chipHtml;
+  setText('releaseAction', profile.release);
+  setText('releaseStats', `${bytes(releasedBytes)} returned | retired ${fmt(a.retired_mode_count || 0)}`);
+  setNodeState('policyNode', adaptiveOnline ? 'active' : '');
+  setNodeState('releaseNode', current === 'compact_rss' || releasePressure > 0.08 ? 'warn' : '');
+
+  const storageNodes = [
+    ['sizeClass', 'sizeClassNode', 'SizeClass', 0],
+    ['span', 'spanNode', 'Span', 1],
+    ['direct', 'directNode', 'DirectMap', 2]
+  ];
+  storageNodes.forEach(([prefix, nodeId, label, idx]) => {
+    const share = storageAlloc[idx] / totalStorageAlloc;
+    const util = storageUsable[idx] > 0
+      ? Math.min(1, storageRequested[idx] / storageUsable[idx])
+      : 0;
+    const reuse = poolHits[idx] + poolMisses[idx] > 0
+      ? poolHits[idx] / (poolHits[idx] + poolMisses[idx])
+      : 0;
+    setText(`${prefix}Value`, `${fmt(storageAlloc[idx])} allocs`);
+    setText(`${prefix}Caption`, `${label} share ${fmt(share * 100)}% | reuse ${fmt(reuse * 100)}% | fit ${fmt(util * 100)}%`);
+    setMeter(`${prefix}Meter`, share * 100);
+    const directHot = idx === 2 && (current === 'large_object' || current === 'hardened_debug');
+    const spanHot = idx === 1 && current === 'fragmentation_stable';
+    const sizeHot = idx === 0 && (current === 'throughput_cache' || current === 'balanced');
+    setNodeState(nodeId, share > 0.42 || directHot || spanHot || sizeHot ? 'hot' : '');
+  });
+
+  setText('cacheValue', `${fmt(hitRate * 100)}% hit`);
+  setMeter('cacheMeter', hitRate * 100);
+  setNodeState('cacheNode', current === 'throughput_cache' || hitRate > 0.45 ? 'hot' : '');
+
+  setText('remoteValue', `${fmt(remoteRatio * 100)}% | ${fmt(w.remote_frees || 0)} frees`);
+  setMeter('remoteMeter', pct(remoteRatio, 0.35));
+  setNodeState('remoteNode', current === 'cross_thread' || remoteRatio > 0.10 ? 'hot' : '');
+
+  setText('reclaimValue', bytes(releasedBytes));
+  setText('reclaimCaption', `${fmt(a.released_pages || 0)} pages, ${fmt(a.released_spans || 0)} spans released`);
+  setMeter('reclaimMeter', pct(releasePressure, 0.35));
+  setNodeState('reclaimNode', current === 'compact_rss' || releasePressure > 0.08 ? 'warn' : '');
+
+  setText('debugValue', `${fmt(safetyErrors)} errors`);
+  setMeter('debugMeter', Math.min(100, safetyErrors * 12));
+  setNodeState('debugNode', safetyErrors > 0 ? 'alert' : current === 'hardened_debug' ? 'hot' : '');
+
+  const selectorText = lastEvent
+    ? `${lastEvent.selector_backend || 'selector'} -> ${lastEvent.candidate_mode || 'n/a'}`
+    : 'waiting';
+  setText('selectorValue', selectorText);
+  setText('selectorCaption', lastEvent
+    ? `${lastEvent.switched ? 'switched' : 'held'} | ${lastEvent.reason || 'no reason'} | active allocs ${fmt(activeModeAllocs)}`
+    : `active live bytes ${bytes(activeModeLive)}`);
+  setMeter('selectorMeter', selectorConfidence ? selectorConfidence * 100 : (adaptiveOnline ? 35 : 0));
+  setNodeState('selectorNode', lastEvent && lastEvent.switched ? 'active' : adaptiveOnline ? 'hot' : '');
+}
+
 async function poll() {
   try {
     const r = await fetch('/snapshot', { cache: 'no-store' });
@@ -336,6 +528,7 @@ async function poll() {
 
     renderDecision(j.selector_last_window);
     renderTimeline(j.selector_events || []);
+    renderInternalMap(a, w, j.selector_last_window);
 
     document.getElementById('workloadTable').innerHTML = rows([
       ['strategy', w.strategy],

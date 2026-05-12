@@ -42,11 +42,13 @@ behavior, or pass a larger value for longer inspection:
 
 For non-adaptive strategies, the page shows workload phase, ops/sec, live-set
 estimates, requested bytes, remote-free count, and peak RSS. For adaptive runs,
-it also shows current mode, previous mode, mode switches, mapped/live ratio,
-remote-free ratio, large-object ratio, fragmentation estimate, slow-path ratio,
-and safety counters. Adaptive selector decisions are read from the selector
-event ring buffer. The Web snapshot does not call workload feature extraction;
-it only renders events already recorded at selector window boundaries.
+it also renders allocator internals: the facade request flow, `AdaptiveHeader`
+and ownership routing, active mode policy intent, release decision, size-class
+pages, spans, direct maps, TLS/cache reuse, remote-free queue pressure,
+purge/unmap activity, debug/quarantine safety signals, and the selector
+telemetry loop. Adaptive selector decisions are read from the selector event
+ring buffer. The Web snapshot does not call workload feature extraction; it
+only renders events already recorded at selector window boundaries.
 
 The page uses a SpaceX-style black/white telemetry dashboard treatment: high
 contrast text, thin borders, compact status pills, a phase progress track,
@@ -58,6 +60,16 @@ The hero panel includes a SpaceX engine-ignition-style mode rail: all eight
 adaptive modes are listed in order, the active mode is marked by a white dot,
 the previous mode keeps an amber outline, and a mode switch triggers a short
 ignition pulse on the active dot.
+
+The internal-structure panel is not a separate instrumentation path. It is a
+visual projection of fields already exposed by `AdaptiveStatsSnapshot` and the
+selector event ring buffer:
+
+- storage arrays show size-class page, span, and direct-map allocation share;
+- pool hit/miss arrays show cache and central-pool reuse pressure;
+- release counters show empty page/span reclaim and unmapped bytes;
+- safety counters show invalid free, double free, and header-corruption events;
+- selector events show the mode candidate, backend, confidence, and reason.
 
 The UI is implemented as static assets under `tools/web_viewer/`:
 
@@ -140,13 +152,32 @@ The server binds only to `127.0.0.1`.
   },
   "adaptive": {
     "current_mode": "large_object",
+    "active_mode": "large_object",
     "previous_mode": "throughput_cache",
     "mode_switches": 2,
+    "retired_mode_count": 1,
+    "mapped_bytes": 64000000,
+    "live_bytes": 4000000,
     "mapped_live_ratio": 10.5,
     "remote_free_ratio": 0.25,
     "large_bytes_ratio": 0.70,
     "fragmentation_estimate": 0.04,
-    "slow_path_ratio": 0.12
+    "slow_path_ratio": 0.12,
+    "empty_pages": 4,
+    "empty_spans": 1,
+    "released_pages": 20,
+    "released_spans": 5,
+    "release_unmapped_bytes": 32000000,
+    "mode_alloc_count": [100, 200, 0, 20, 40, 10, 80, 0],
+    "mode_free_count": [90, 180, 0, 18, 35, 10, 70, 0],
+    "mode_live_bytes": [0, 4096, 0, 0, 8192, 0, 3000000, 0],
+    "mode_mapped_bytes": [65536, 1048576, 0, 0, 2097152, 0, 32000000, 0],
+    "storage_allocs": [200, 120, 80],
+    "storage_frees": [190, 110, 70],
+    "storage_requested_bytes": [128000, 4096000, 50000000],
+    "storage_usable_bytes": [160000, 4300000, 52000000],
+    "pool_hits": [150, 50, 0],
+    "pool_misses": [50, 70, 80]
   },
   "selector_last_window": {
     "selector_backend": "model",

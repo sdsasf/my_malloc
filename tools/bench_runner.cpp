@@ -189,6 +189,16 @@ static void append_selector_event_json(std::ostringstream& os,
        << "}";
 }
 
+template <typename T, size_t N>
+static void append_array_json(std::ostringstream& os, const char* name, const T (&values)[N]) {
+    os << ",\"" << name << "\":[";
+    for (size_t i = 0; i < N; ++i) {
+        if (i) os << ",";
+        os << values[i];
+    }
+    os << "]";
+}
+
 static void touch_bytes(void* p, size_t size, unsigned char value) {
     if (!p) return;
     std::memset(p, value, std::min<size_t>(size, 64));
@@ -226,8 +236,10 @@ static std::string telemetry_snapshot_json() {
     if (std::strcmp(w.strategy, "adaptive") == 0) {
         auto s = my_ptmalloc::adaptive_stats_snapshot();
         os << ",\"adaptive\":{\"current_mode\":\"" << my_ptmalloc::adaptive_mode_name(s.current_mode)
+           << "\",\"active_mode\":\"" << my_ptmalloc::adaptive_mode_name(s.active_mode)
            << "\",\"previous_mode\":\"" << my_ptmalloc::adaptive_mode_name(s.previous_mode)
            << "\",\"mode_switches\":" << s.mode_switches
+           << ",\"retired_mode_count\":" << s.retired_mode_count
            << ",\"mapped_bytes\":" << s.mapped_bytes
            << ",\"live_bytes\":" << s.live_bytes
            << ",\"mapped_live_ratio\":" << s.mapped_live_ratio
@@ -238,7 +250,53 @@ static std::string telemetry_snapshot_json() {
            << ",\"slow_path_ratio\":" << s.slow_path_ratio
            << ",\"double_free_count\":" << s.double_free_count
            << ",\"invalid_free_count\":" << s.invalid_free_count
-           << "}";
+           << ",\"header_corruption_count\":" << s.header_corruption_count
+           << ",\"empty_pages\":" << s.empty_pages
+           << ",\"empty_spans\":" << s.empty_spans
+           << ",\"released_pages\":" << s.released_pages
+           << ",\"released_spans\":" << s.released_spans
+           << ",\"release_unmapped_bytes\":" << s.release_unmapped_bytes;
+        append_array_json(os, "mode_alloc_count", s.mode_alloc_count);
+        append_array_json(os, "mode_free_count", s.mode_free_count);
+        append_array_json(os, "mode_live_bytes", s.mode_live_bytes);
+        append_array_json(os, "mode_mapped_bytes", s.mode_mapped_bytes);
+        uint64_t storage_allocs[3] = {
+            s.storage[0].alloc_count,
+            s.storage[1].alloc_count,
+            s.storage[2].alloc_count,
+        };
+        uint64_t storage_frees[3] = {
+            s.storage[0].free_count,
+            s.storage[1].free_count,
+            s.storage[2].free_count,
+        };
+        uint64_t storage_requested[3] = {
+            s.storage[0].requested_bytes,
+            s.storage[1].requested_bytes,
+            s.storage[2].requested_bytes,
+        };
+        uint64_t storage_usable[3] = {
+            s.storage[0].usable_bytes,
+            s.storage[1].usable_bytes,
+            s.storage[2].usable_bytes,
+        };
+        uint64_t pool_hits[3] = {
+            s.storage[0].pool_hits,
+            s.storage[1].pool_hits,
+            s.storage[2].pool_hits,
+        };
+        uint64_t pool_misses[3] = {
+            s.storage[0].pool_misses,
+            s.storage[1].pool_misses,
+            s.storage[2].pool_misses,
+        };
+        append_array_json(os, "storage_allocs", storage_allocs);
+        append_array_json(os, "storage_frees", storage_frees);
+        append_array_json(os, "storage_requested_bytes", storage_requested);
+        append_array_json(os, "storage_usable_bytes", storage_usable);
+        append_array_json(os, "pool_hits", pool_hits);
+        append_array_json(os, "pool_misses", pool_misses);
+        os << "}";
         my_ptmalloc::AdaptiveSelectorEvent last_event{};
         if (my_ptmalloc::adaptive_selector_last_event(last_event)) {
             os << ",\"selector_last_window\":";

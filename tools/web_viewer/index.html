@@ -56,6 +56,105 @@
       </article>
     </section>
 
+    <section class="panel internal-panel">
+      <div class="section-head">
+        <div><div class="eyebrow">allocator internals</div><h2>Shared Substrate Map</h2></div>
+        <div id="substrateHealth" class="system-chip">waiting</div>
+      </div>
+      <div class="internal-map">
+        <div class="internal-column">
+          <div class="internal-node input-node">
+            <div class="node-kicker">front door</div>
+            <div class="node-title">malloc / free / realloc</div>
+            <div id="apiFlow" class="node-value">0 ops</div>
+            <div class="node-caption">requests enter the adaptive facade</div>
+          </div>
+          <div class="flow-arrow"></div>
+          <div class="internal-node">
+            <div class="node-kicker">metadata</div>
+            <div class="node-title">AdaptiveHeader + Ownership</div>
+            <div id="headerFlow" class="node-value">mode_id stable</div>
+            <div class="node-caption">free routes by allocation-time mode</div>
+          </div>
+        </div>
+
+        <div class="internal-column">
+          <div id="policyNode" class="internal-node policy-node">
+            <div class="node-kicker">mode policy layer</div>
+            <div id="policyMode" class="node-title">-</div>
+            <div id="policyIntent" class="node-value">waiting for plan</div>
+            <div id="policyChips" class="node-chips"></div>
+          </div>
+          <div class="flow-arrow"></div>
+          <div id="releaseNode" class="internal-node">
+            <div class="node-kicker">release decision</div>
+            <div id="releaseAction" class="node-title">-</div>
+            <div id="releaseStats" class="node-value">0 bytes returned</div>
+            <div class="node-caption">cache, purge, unmap, or quarantine</div>
+          </div>
+        </div>
+
+        <div class="substrate-grid">
+          <div id="sizeClassNode" class="internal-node substrate-node">
+            <div class="node-kicker">storage service</div>
+            <div class="node-title">Size-Class Pages</div>
+            <div id="sizeClassValue" class="node-value">0 allocs</div>
+            <div class="mini-meter"><div id="sizeClassMeter"></div></div>
+            <div id="sizeClassCaption" class="node-caption">small-object slots</div>
+          </div>
+          <div id="spanNode" class="internal-node substrate-node">
+            <div class="node-kicker">storage service</div>
+            <div class="node-title">Spans</div>
+            <div id="spanValue" class="node-value">0 allocs</div>
+            <div class="mini-meter"><div id="spanMeter"></div></div>
+            <div id="spanCaption" class="node-caption">medium object ranges</div>
+          </div>
+          <div id="directNode" class="internal-node substrate-node">
+            <div class="node-kicker">storage service</div>
+            <div class="node-title">Direct Maps</div>
+            <div id="directValue" class="node-value">0 allocs</div>
+            <div class="mini-meter"><div id="directMeter"></div></div>
+            <div id="directCaption" class="node-caption">large/debug isolated regions</div>
+          </div>
+          <div id="cacheNode" class="internal-node substrate-node">
+            <div class="node-kicker">reuse path</div>
+            <div class="node-title">TLS Cache + Central Pools</div>
+            <div id="cacheValue" class="node-value">0% hit</div>
+            <div class="mini-meter"><div id="cacheMeter"></div></div>
+            <div class="node-caption">hot reuse without changing ownership</div>
+          </div>
+          <div id="remoteNode" class="internal-node substrate-node">
+            <div class="node-kicker">ownership path</div>
+            <div class="node-title">Remote-Free Queue</div>
+            <div id="remoteValue" class="node-value">0%</div>
+            <div class="mini-meter"><div id="remoteMeter"></div></div>
+            <div class="node-caption">non-owner frees go owner-aware</div>
+          </div>
+          <div id="reclaimNode" class="internal-node substrate-node">
+            <div class="node-kicker">reclaim path</div>
+            <div class="node-title">Purge / Unmap</div>
+            <div id="reclaimValue" class="node-value">0 bytes</div>
+            <div class="mini-meter"><div id="reclaimMeter"></div></div>
+            <div id="reclaimCaption" class="node-caption">empty pages and spans return memory</div>
+          </div>
+          <div id="debugNode" class="internal-node substrate-node">
+            <div class="node-kicker">safety path</div>
+            <div class="node-title">Quarantine + Redzone</div>
+            <div id="debugValue" class="node-value">0 errors</div>
+            <div class="mini-meter"><div id="debugMeter"></div></div>
+            <div class="node-caption">invalid, double-free, header corruption</div>
+          </div>
+          <div id="selectorNode" class="internal-node substrate-node selector-node">
+            <div class="node-kicker">telemetry loop</div>
+            <div class="node-title">Window Selector</div>
+            <div id="selectorValue" class="node-value">waiting</div>
+            <div class="mini-meter"><div id="selectorMeter"></div></div>
+            <div id="selectorCaption" class="node-caption">events explain mode switches</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="panel chart-panel">
       <div class="section-head">
         <div><div class="eyebrow">flight trace</div><h2>Runtime Signals</h2></div>
