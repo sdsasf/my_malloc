@@ -8,7 +8,7 @@ class TelemetryServer {
 public:
     using SnapshotFn = std::string (*)();
 
-    TelemetryServer(SnapshotFn snapshot_fn, std::string static_root);
+    TelemetryServer(SnapshotFn snapshot_fn, SnapshotFn comparison_fn, std::string static_root);
     ~TelemetryServer();
 
     bool start(int port);
@@ -21,6 +21,7 @@ private:
     static void send_all(int fd, const char* data, size_t size);
 
     SnapshotFn snapshot_fn_;
+    SnapshotFn comparison_fn_;
     std::string static_root_;
     int fd_ = -1;
     std::atomic<bool> running_{false};

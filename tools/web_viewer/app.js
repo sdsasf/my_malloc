@@ -1,6 +1,11 @@
 const hist = [];
 const maxN = 260;
 let smoothSample = null;
+let comparisonData = null;
+let oracleTrace = [];
+let comparisonFetchPending = false;
+const adaptiveTpsTrace = [];
+const maxAdaptiveTrace = 420;
 const modes = [
   ['balanced', 'balanced'],
   ['throughput_cache', 'throughput'],
@@ -13,6 +18,16 @@ const modes = [
 ];
 let lastMode = '';
 const modeIndex = Object.fromEntries(modes.map(([id], i) => [id, i]));
+const modeColors = {
+  balanced: '#8e98a5',
+  throughput_cache: '#b6f2c2',
+  deterministic_latency: '#99d6ff',
+  compact_rss: '#f0b35b',
+  fragmentation_stable: '#f5f5f1',
+  cross_thread: '#78b9e8',
+  large_object: '#ffd27d',
+  hardened_debug: '#ff7d70'
+};
 
 const icons = {
   pulse: '<svg viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 13 3-7h5"/></svg>',
@@ -265,6 +280,479 @@ function unitFmt(value, unit) {
   return fmt(value);
 }
 
+function phaseX(p) {
+  return Number(p.phase_index || 0) + Number(p.phase_progress || 0);
+}
+
+function traceBucket(w) {
+  return Math.max(0, Math.min(20, Math.floor(Number(w.phase_progress || 0) * 20)));
+}
+
+function pointBucket(point) {
+  if (point && Number.isFinite(Number(point.phase_bucket))) {
+    return Number(point.phase_bucket);
+  }
+  return traceBucket(point || {});
+}
+
+function comparisonModeTraces() {
+  return comparisonData && Array.isArray(comparisonData.modes) ? comparisonData.modes : [];
+}
+
+function modeTrace(mode) {
+  return comparisonModeTraces().find(trace => trace.mode === mode) || null;
+}
+
+function rebuildOracleTrace() {
+  const best = new Map();
+  comparisonModeTraces().forEach(trace => {
+    (trace.points || []).forEach(point => {
+      const key = `${point.phase_index}:${point.phase_bucket}`;
+      const tps = Number(point.ops_per_sec || 0);
+      const prev = best.get(key);
+      if (!prev || tps > prev.ops_per_sec) {
+        best.set(key, {
+          phase_index: Number(point.phase_index || 0),
+          phase_bucket: Number(point.phase_bucket || 0),
+          phase_progress: Number(point.phase_progress || 0),
+          ops_per_sec: tps,
+          mode: trace.mode
+        });
+      }
+    });
+  });
+  oracleTrace = [...best.values()].sort((a, b) => phaseX(a) - phaseX(b));
+}
+
+function nearestTracePoint(points, w) {
+  if (!points || !points.length) return null;
+  const phase = Number(w.phase_index || 0);
+  const bucket = pointBucket(w);
+  let nearest = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  points.forEach(point => {
+    if (Number(point.phase_index) !== phase) return;
+    const distance = Math.abs(pointBucket(point) - bucket);
+    if (distance < bestDistance) {
+      nearest = point;
+      bestDistance = distance;
+    }
+  });
+  return nearest;
+}
+
+function nearestOraclePoint(w) {
+  return nearestTracePoint(oracleTrace, w);
+}
+
+function lastAdaptivePoint() {
+  return adaptiveTpsTrace.length ? adaptiveTpsTrace[adaptiveTpsTrace.length - 1] : null;
+}
+
+function comparisonCursor(w) {
+  const livePhase = Number(w.phase_index || 0);
+  const knownPhaseCount = maxPhaseCount();
+  const lastAdaptive = lastAdaptivePoint();
+  if ((!w.running && lastAdaptive) || livePhase >= knownPhaseCount) {
+    return lastAdaptive || w;
+  }
+  return w;
+}
+
+function recordAdaptiveTps(w, a, tps) {
+  if (!w || !w.running || !Number.isFinite(Number(tps)) || Number(tps) <= 0) return;
+  const point = {
+    phase_index: Number(w.phase_index || 0),
+    phase_bucket: traceBucket(w),
+    phase_progress: Number(w.phase_progress || 0),
+    ops_per_sec: Number(tps || 0),
+    mode: a.current_mode || 'n/a'
+  };
+  const last = adaptiveTpsTrace[adaptiveTpsTrace.length - 1];
+  if (last && last.phase_index === point.phase_index && last.phase_bucket === point.phase_bucket) {
+    adaptiveTpsTrace[adaptiveTpsTrace.length - 1] = point;
+    return;
+  }
+  adaptiveTpsTrace.push(point);
+  if (adaptiveTpsTrace.length > maxAdaptiveTrace) adaptiveTpsTrace.shift();
+}
+
+function tpsSeriesRange() {
+  const values = [];
+  comparisonModeTraces().forEach(trace => (trace.points || []).forEach(p => values.push(Number(p.ops_per_sec || 0))));
+  oracleTrace.forEach(p => values.push(Number(p.ops_per_sec || 0)));
+  adaptiveTpsTrace.forEach(p => values.push(Number(p.ops_per_sec || 0)));
+  return niceRange(values.length ? values : [0, 1]);
+}
+
+function maxPhaseCount() {
+  let maxPhase = 1;
+  comparisonModeTraces().forEach(trace => {
+    (trace.points || []).forEach(point => {
+      maxPhase = Math.max(maxPhase, Number(point.phase_index || 0) + 1);
+    });
+  });
+  adaptiveTpsTrace.forEach(point => {
+    maxPhase = Math.max(maxPhase, Number(point.phase_index || 0) + 1);
+  });
+  return maxPhase;
+}
+
+function drawPolyline(ctx, points, xOf, yOf, color, width, dashed = false, opacity = 1) {
+  if (!points || !points.length) return;
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.setLineDash(dashed ? [8, 5] : []);
+  ctx.beginPath();
+  points.forEach((point, i) => {
+    const x = xOf(point);
+    const y = yOf(point);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawComparisonChart(activeMode = '') {
+  const canvas = document.getElementById('comparisonChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#020303';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const top = 42, right = 22, bottom = 42, left = 82;
+  const h = canvas.height - top - bottom;
+  const w = canvas.width - left - right;
+  const [mn, mx] = tpsSeriesRange();
+  const phaseCount = maxPhaseCount();
+  const xOf = p => left + phaseX(p) / Math.max(1, phaseCount) * w;
+  const yOf = p => top + h - (Number(p.ops_per_sec || 0) - mn) / Math.max(1e-9, mx - mn) * h;
+
+  ctx.strokeStyle = '#171c23';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = top + i * h / 4;
+    ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(left + w, y); ctx.stroke();
+    const value = mx - (mx - mn) * i / 4;
+    ctx.fillStyle = '#56606d';
+    ctx.font = '11px system-ui';
+    ctx.fillText(unitFmt(value, 'ops/sec'), 8, y + 4);
+  }
+  for (let i = 0; i <= phaseCount; i++) {
+    const x = left + i * w / Math.max(1, phaseCount);
+    ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + h); ctx.stroke();
+    ctx.fillStyle = '#56606d';
+    ctx.font = '11px system-ui';
+    ctx.fillText(`P${i + 1}`, Math.min(left + w - 24, x + 4), canvas.height - 16);
+  }
+
+  const selectedTrace = modeTrace(activeMode);
+  if (selectedTrace) {
+    drawPolyline(ctx, selectedTrace.points || [], xOf, yOf, modeColors[activeMode] || '#99d6ff', 2.0, false, 0.88);
+  }
+  drawPolyline(ctx, oracleTrace, xOf, yOf, '#f0b35b', 2.5, true, 0.98);
+  drawPolyline(ctx, adaptiveTpsTrace, xOf, yOf, '#f5f5f1', 3.2, false, 1);
+
+  let previousMode = '';
+  adaptiveTpsTrace.forEach(point => {
+    if (!previousMode) {
+      previousMode = point.mode;
+      return;
+    }
+    if (point.mode === previousMode) return;
+    const x = xOf(point);
+    ctx.save();
+    ctx.strokeStyle = '#f5f5f1';
+    ctx.globalAlpha = 0.58;
+    ctx.setLineDash([4, 5]);
+    ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + h); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = '#f5f5f1';
+    ctx.font = '11px system-ui';
+    ctx.fillText(point.mode, Math.min(left + w - 110, x + 5), top + 14);
+    previousMode = point.mode;
+  });
+
+  ctx.fillStyle = '#f5f5f1';
+  ctx.font = '12px system-ui';
+  ctx.fillText('ADAPTIVE TPS AGAINST ORACLE', left, 19);
+  ctx.fillStyle = '#8e98a5';
+  ctx.fillText(`adaptive white | oracle dashed | selected fixed ${activeMode || 'mode'} colored`, left + 208, 19);
+}
+
+function ensureModeMiniGrid() {
+  const grid = document.getElementById('modeMiniGrid');
+  if (!grid || grid.dataset.ready === '1') return;
+  grid.innerHTML = modes.map(([mode, label]) => `
+    <article class="mode-mini-card">
+      <div class="mode-mini-head">
+        <strong>${label}</strong>
+        <span class="mode-mini-stats">
+          <span id="miniNow-${mode}">last 0</span>
+          <span id="miniPeak-${mode}">peak 0</span>
+        </span>
+      </div>
+      <canvas id="mini-${mode}" class="mode-mini-canvas" width="300" height="120"></canvas>
+    </article>`).join('');
+  grid.dataset.ready = '1';
+}
+
+function drawMiniModeCharts() {
+  const grid = document.getElementById('modeMiniGrid');
+  if (!comparisonData || !comparisonData.ready || !comparisonModeTraces().length) {
+    if (grid) {
+      grid.innerHTML = '';
+      grid.dataset.ready = '0';
+    }
+    return;
+  }
+  ensureModeMiniGrid();
+  const phaseCount = maxPhaseCount();
+  comparisonModeTraces().forEach(trace => {
+    const canvas = document.getElementById(`mini-${trace.mode}`);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#020303';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const top = 12, right = 8, bottom = 14, left = 8;
+    const h = canvas.height - top - bottom;
+    const w = canvas.width - left - right;
+    const values = (trace.points || []).map(p => Number(p.ops_per_sec || 0));
+    const [mn, mx] = niceRange(values.length ? values : [0, 1]);
+    const xOf = p => left + phaseX(p) / Math.max(1, phaseCount) * w;
+    const yOf = p => top + h - (Number(p.ops_per_sec || 0) - mn) / Math.max(1e-9, mx - mn) * h;
+    ctx.strokeStyle = '#171c23';
+    for (let i = 0; i <= phaseCount; i++) {
+      const x = left + i * w / Math.max(1, phaseCount);
+      ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + h); ctx.stroke();
+    }
+    drawPolyline(ctx, trace.points || [], xOf, yOf, modeColors[trace.mode] || '#8e98a5', 2.0, false, 1);
+    const peak = Math.max(0, ...(trace.points || []).map(p => Number(p.ops_per_sec || 0)));
+    const last = (trace.points || [])[Math.max(0, (trace.points || []).length - 1)] || null;
+    setText(`miniNow-${trace.mode}`, `last ${fmt(last ? last.ops_per_sec : 0)}`);
+    setText(`miniPeak-${trace.mode}`, `peak ${fmt(peak)}`);
+  });
+}
+
+function stripHtml(points, currentKey) {
+  return (points || []).map(point => {
+    const key = `${point.phase_index}:${point.phase_bucket}`;
+    const active = key === currentKey ? ' active' : '';
+    const color = modeColors[point.mode] || '#242a33';
+    const title = `${point.mode || 'n/a'} | ${fmt(point.ops_per_sec || 0)} ops/sec`;
+    return `<div class="strip-cell${active}" title="${title}" style="background:${color}"></div>`;
+  }).join('');
+}
+
+function renderOracleState(w, a, currentTps) {
+  const state = document.getElementById('comparisonState');
+  if (!comparisonData || !comparisonData.enabled) {
+    setText('comparisonState', 'reference off');
+    setText('oracleMode', 'enable compare');
+    setText('oracleEfficiency', '--telemetry');
+    setText('oracleAlignment', 'compare-modes');
+    setText('oracleGap', 'no oracle');
+    return;
+  }
+  state.classList.toggle('hot', !!comparisonData.ready);
+  setText('comparisonState', comparisonData.ready ? 'TPS oracle ready' : comparisonData.status || 'collecting');
+  const cursor = comparisonCursor(w);
+  const lastAdaptive = lastAdaptivePoint();
+  const displayTps = (!w.running && lastAdaptive)
+    ? Number(lastAdaptive.ops_per_sec || 0)
+    : Number(currentTps || 0);
+  const oracle = nearestOraclePoint(cursor);
+  if (!oracle || !Number.isFinite(displayTps) || displayTps <= 0) {
+    setText('oracleMode', oracle ? oracle.mode : comparisonData.ready ? 'awaiting phase' : 'collecting');
+    setText('oracleEfficiency', comparisonData.ready ? 'awaiting TPS' : 'collecting');
+    setText('oracleAlignment', comparisonData.ready ? 'awaiting run' : 'collecting');
+    setText('oracleGap', comparisonData.ready ? 'awaiting TPS' : 'collecting');
+    return;
+  }
+  const adaptiveTps = displayTps;
+  const oracleTps = Number(oracle.ops_per_sec || 0);
+  const efficiency = oracleTps > 0 ? adaptiveTps / oracleTps : 0;
+  const gap = Math.max(0, oracleTps - adaptiveTps);
+  const adaptiveMode = (!w.running && lastAdaptive && lastAdaptive.mode)
+    ? lastAdaptive.mode
+    : (a.current_mode || '');
+  const aligned = adaptiveMode === oracle.mode;
+  setText('oracleMode', oracle.mode || 'n/a');
+  setText('oracleEfficiency', `${fmt(efficiency * 100)}%`);
+  setText('oracleAlignment', aligned ? 'matched' : 'diverged');
+  setText('oracleGap', `${fmt(gap)} ops/sec`);
+  const eff = document.getElementById('oracleEfficiency');
+  const align = document.getElementById('oracleAlignment');
+  [eff, align].forEach(el => el && el.classList.remove('good', 'warn', 'bad'));
+  if (eff) eff.classList.add(efficiency >= 0.92 ? 'good' : efficiency >= 0.75 ? 'warn' : 'bad');
+  if (align) align.classList.add(aligned ? 'good' : 'warn');
+  const key = `${pointBucket(cursor) >= 0 ? Number(cursor.phase_index || 0) : 0}:${pointBucket(cursor)}`;
+  document.getElementById('oracleModeStrip').innerHTML = stripHtml(oracleTrace, key);
+  document.getElementById('adaptiveModeStrip').innerHTML = stripHtml(adaptiveTpsTrace, key);
+}
+
+function renderModeRanking(w, a, currentTps) {
+  const host = document.getElementById('modeRanking');
+  const foot = document.getElementById('rankingFoot');
+  if (!host || !foot) return;
+  if (!comparisonData || !comparisonData.enabled) {
+    setText('rankingPhase', 'reference off');
+    host.innerHTML = '<div class="ranking-foot">No fixed-mode reference traces were requested for this run.</div>';
+    foot.textContent = 'Start the workload with --telemetry-compare-modes to rank all modes.';
+    return;
+  }
+  if (!comparisonData.ready) {
+    setText('rankingPhase', comparisonData.status || 'collecting');
+    host.innerHTML = '<div class="ranking-foot">Collecting isolated fixed-mode TPS references.</div>';
+    foot.textContent = 'Ranking appears after comparison traces are ready.';
+    return;
+  }
+
+  const cursor = comparisonCursor(w);
+  const oracle = nearestOraclePoint(cursor);
+  const lastAdaptive = lastAdaptivePoint();
+  const adaptiveMode = (!w.running && lastAdaptive && lastAdaptive.mode)
+    ? lastAdaptive.mode
+    : (a.current_mode || '');
+  const displayTps = (!w.running && lastAdaptive)
+    ? Number(lastAdaptive.ops_per_sec || 0)
+    : Number(currentTps || 0);
+  const rows = comparisonModeTraces()
+    .map(trace => {
+      const point = nearestTracePoint(trace.points || [], cursor);
+      return point ? {
+        mode: trace.mode,
+        ops_per_sec: Number(point.ops_per_sec || 0),
+        point
+      } : null;
+    })
+    .filter(Boolean)
+    .sort((lhs, rhs) => rhs.ops_per_sec - lhs.ops_per_sec);
+
+  if (!rows.length) {
+    setText('rankingPhase', 'awaiting phase');
+    host.innerHTML = '<div class="ranking-foot">No comparable fixed-mode sample exists for the current phase.</div>';
+    foot.textContent = 'The viewer will reuse the last valid phase after the live run finishes.';
+    return;
+  }
+
+  const best = rows[0];
+  const scale = Math.max(1, best.ops_per_sec);
+  setText('rankingPhase', `P${Number(cursor.phase_index || 0) + 1}.${pointBucket(cursor) + 1}`);
+  host.innerHTML = rows.map((row, index) => {
+    const isActive = row.mode === adaptiveMode;
+    const isOracle = oracle && row.mode === oracle.mode;
+    const width = Math.max(2, Math.min(100, row.ops_per_sec / scale * 100));
+    const label = modes.find(([id]) => id === row.mode)?.[1] || row.mode;
+    const color = modeColors[row.mode] || '#f5f5f1';
+    return `<div class="ranking-row${isActive ? ' active' : ''}${isOracle ? ' oracle' : ''}">
+      <div class="ranking-rank">#${index + 1}</div>
+      <div class="ranking-mode"><span class="ranking-dot" style="background:${color}"></span><span>${label}</span></div>
+      <div class="ranking-track"><div class="ranking-fill" style="width:${width}%;background:${color}"></div></div>
+      <div class="ranking-value">${fmt(row.ops_per_sec)}</div>
+    </div>`;
+  }).join('');
+
+  const oracleMode = oracle ? oracle.mode : best.mode;
+  const oracleTps = oracle ? Number(oracle.ops_per_sec || 0) : best.ops_per_sec;
+  const efficiency = oracleTps > 0 ? displayTps / oracleTps : 0;
+  const alignment = adaptiveMode && oracleMode && adaptiveMode === oracleMode ? 'matched' : 'diverged';
+  foot.textContent =
+    `oracle ${oracleMode || 'n/a'} | adaptive ${adaptiveMode || 'n/a'} ${alignment} | live/oracle ${fmt(Math.max(0, efficiency) * 100)}%`;
+}
+
+function heatmapColor(ratio) {
+  const bounded = Math.max(0, Math.min(1, Number(ratio || 0)));
+  const alpha = 0.10 + bounded * 0.82;
+  return `rgba(240,179,91,${alpha.toFixed(3)})`;
+}
+
+function renderModeHeatmap(w, activeMode = '') {
+  const host = document.getElementById('modeHeatmap');
+  if (!host) return;
+  if (!comparisonData || !comparisonData.enabled) {
+    host.style.gridTemplateColumns = '160px 1fr';
+    host.innerHTML = '<div class="heatmap-corner">mode</div><div class="heatmap-axis">comparison disabled</div>';
+    return;
+  }
+  if (!comparisonData.ready || !oracleTrace.length) {
+    host.style.gridTemplateColumns = '160px 1fr';
+    host.innerHTML = '<div class="heatmap-corner">mode</div><div class="heatmap-axis">collecting fixed-mode references</div>';
+    return;
+  }
+
+  const cursor = comparisonCursor(w);
+  const activeKey = `${Number(cursor.phase_index || 0)}:${pointBucket(cursor)}`;
+  const columns = oracleTrace.slice();
+  host.style.gridTemplateColumns = `160px repeat(${columns.length}, 22px)`;
+  let html = '<div class="heatmap-corner">mode</div>';
+  html += columns.map(point =>
+    `<div class="heatmap-axis" title="phase ${Number(point.phase_index || 0) + 1}, bucket ${pointBucket(point) + 1}">P${Number(point.phase_index || 0) + 1}</div>`
+  ).join('');
+
+  modes.forEach(([mode, label]) => {
+    const trace = modeTrace(mode);
+    const displayActiveMode = activeMode || (lastAdaptivePoint() ? lastAdaptivePoint().mode : '');
+    html += `<div class="heatmap-label${mode === displayActiveMode ? ' active' : ''}">${label}</div>`;
+    html += columns.map(column => {
+      const point = trace ? nearestTracePoint(trace.points || [], column) : null;
+      const value = point ? Number(point.ops_per_sec || 0) : 0;
+      const oracleValue = Math.max(1, Number(column.ops_per_sec || 0));
+      const ratio = Math.max(0, Math.min(1, value / oracleValue));
+      const cellKey = `${Number(column.phase_index || 0)}:${pointBucket(column)}`;
+      const oracleClass = column.mode === mode ? ' oracle' : '';
+      const activeClass = cellKey === activeKey ? ' active-phase' : '';
+      const title = `${label} | P${Number(column.phase_index || 0) + 1}.${pointBucket(column) + 1} | ${fmt(value)} ops/sec | ${fmt(ratio * 100)}% of oracle`;
+      return `<div class="heatmap-cell${oracleClass}${activeClass}" title="${title}" style="background:${heatmapColor(ratio)}"></div>`;
+    }).join('');
+  });
+  host.innerHTML = html;
+}
+
+function renderComparison(w, a, currentTps) {
+  recordAdaptiveTps(w, a, currentTps);
+  renderOracleState(w, a, currentTps);
+  renderModeRanking(w, a, currentTps);
+  renderModeHeatmap(w, a.current_mode || '');
+  renderComparisonLegend(a.current_mode || '');
+  drawComparisonChart(a.current_mode || '');
+  drawMiniModeCharts();
+}
+
+function renderComparisonLegend(activeMode = '') {
+  const host = document.getElementById('comparisonLegend');
+  if (!host) return;
+  const activeLabel = modes.find(([mode]) => mode === activeMode)?.[1] || 'selected mode';
+  const activeColor = modeColors[activeMode] || '#99d6ff';
+  host.innerHTML = [
+    '<span class="legend-chip"><span class="legend-swatch"></span>adaptive live</span>',
+    '<span class="legend-chip"><span class="legend-swatch dashed" style="color:#f0b35b"></span>TPS oracle</span>',
+    `<span class="legend-chip"><span class="legend-swatch" style="background:${activeColor}"></span>fixed ${activeLabel}</span>`
+  ].join('');
+}
+
+async function loadComparison() {
+  if (comparisonFetchPending) return;
+  comparisonFetchPending = true;
+  try {
+    const r = await fetch('/comparison', { cache: 'no-store' });
+    comparisonData = await r.json();
+    rebuildOracleTrace();
+    renderComparisonLegend();
+    drawComparisonChart();
+    renderModeHeatmap({ phase_index: 0, phase_bucket: 0, phase_progress: 0, running: false });
+    drawMiniModeCharts();
+  } catch (e) {
+    comparisonData = { enabled: false, ready: false, status: 'unavailable', modes: [] };
+  } finally {
+    comparisonFetchPending = false;
+  }
+}
+
 function drawSignal(canvasId, key, title, unit, color) {
   const c = document.getElementById(canvasId);
   const ctx = c.getContext('2d');
@@ -500,13 +988,14 @@ async function poll() {
     document.getElementById('phaseFill').style.width = `${Math.max(0, Math.min(100, (w.phase_progress || 0) * 100))}%`;
     phaseCells(w.phase_index || 0, w.phase_count || 1);
 
-    document.getElementById('ops').textContent = fmt(w.ops_per_sec);
+    const currentTps = Number(w.window_ops_per_sec || w.ops_per_sec || 0);
+    document.getElementById('ops').textContent = fmt(currentTps);
     document.getElementById('liveBytes').textContent = fmt(w.live_bytes);
     document.getElementById('mappedLive').textContent = fmt(a.mapped_live_ratio);
     document.getElementById('validationErrors').textContent = fmt(g.validation_errors || 0);
 
     const raw = {
-      ops: w.ops_per_sec || 0,
+      ops: currentTps,
       live: (w.live_bytes || 0) / 1024,
       mapped: (a.mapped_bytes || 0) / 1024,
       ratio: a.mapped_live_ratio || 0
@@ -529,6 +1018,7 @@ async function poll() {
     renderDecision(j.selector_last_window);
     renderTimeline(j.selector_events || []);
     renderInternalMap(a, w, j.selector_last_window);
+    renderComparison(w, a, currentTps);
 
     document.getElementById('workloadTable').innerHTML = rows([
       ['strategy', w.strategy],
@@ -554,4 +1044,5 @@ async function poll() {
 
 setInterval(poll, 300);
 initModeRail();
+loadComparison();
 poll();

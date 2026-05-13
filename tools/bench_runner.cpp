@@ -15,6 +15,7 @@
 #include <sstream>
 #include <string>
 #include <sys/resource.h>
+#include <sys/wait.h>
 #include <thread>
 #include <time.h>
 #include <unistd.h>
@@ -59,6 +60,9 @@ struct BenchConfig {
     int payload_validation_rate = 64;
     int telemetry_port = 0;
     int telemetry_hold_ms = 300000;
+    bool telemetry_compare_modes = false;
+    int telemetry_compare_phase_ms = 600;
+    bool telemetry_trace_stdout = false;
 };
 
 struct RepeatSummary {
@@ -101,6 +105,7 @@ struct WorkloadSnapshot {
     uint64_t validation_checks = 0;
     uint64_t validation_errors = 0;
     double elapsed_ms = 0.0;
+    double window_ops_per_sec = 0.0;
     double phase_elapsed_ms = 0.0;
     double phase_duration_ms = 0.0;
     double phase_progress = 0.0;
@@ -111,10 +116,57 @@ std::mutex g_workload_snapshot_mutex;
 WorkloadSnapshot g_workload_snapshot;
 double g_workload_start_ms = 0.0;
 
+struct ThroughputTracePoint {
+    int phase_index = 0;
+    int phase_bucket = 0;
+    double phase_progress = 0.0;
+    double ops_per_sec = 0.0;
+};
+
+struct ModeComparisonTrace {
+    std::string mode;
+    std::vector<ThroughputTracePoint> points;
+};
+
+std::mutex g_comparison_mutex;
+bool g_comparison_enabled = false;
+bool g_comparison_ready = false;
+std::string g_comparison_status = "disabled";
+std::vector<ModeComparisonTrace> g_comparison_traces;
+
+bool g_trace_stdout = false;
+int g_trace_last_phase = -1;
+int g_trace_last_bucket = -1;
+std::vector<ThroughputTracePoint> g_local_trace;
+
+static void trace_reset() {
+    g_trace_last_phase = -1;
+    g_trace_last_bucket = -1;
+    g_local_trace.clear();
+}
+
+static void maybe_record_trace_point(int phase_index,
+                                     double phase_progress,
+                                     double window_ops_per_sec) {
+    if (!g_trace_stdout || window_ops_per_sec <= 0.0) return;
+    int bucket = static_cast<int>(std::floor(std::max(0.0, std::min(1.0, phase_progress)) * 20.0));
+    bucket = std::max(0, std::min(20, bucket));
+    if (phase_index == g_trace_last_phase && bucket == g_trace_last_bucket) return;
+    g_trace_last_phase = phase_index;
+    g_trace_last_bucket = bucket;
+    g_local_trace.push_back(ThroughputTracePoint{
+        phase_index,
+        bucket,
+        static_cast<double>(bucket) / 20.0,
+        window_ops_per_sec,
+    });
+}
+
 static void set_workload_identity(const char* strategy,
                                   const char* benchmark,
                                   const char* template_name) {
     std::lock_guard<std::mutex> lock(g_workload_snapshot_mutex);
+    g_workload_snapshot = WorkloadSnapshot{};
     std::snprintf(g_workload_snapshot.strategy, sizeof(g_workload_snapshot.strategy), "%s", strategy);
     std::snprintf(g_workload_snapshot.benchmark, sizeof(g_workload_snapshot.benchmark), "%s", benchmark);
     std::snprintf(g_workload_snapshot.template_name, sizeof(g_workload_snapshot.template_name), "%s", template_name);
@@ -136,8 +188,21 @@ static void update_workload_snapshot(const char* phase,
                                      uint64_t validation_errors,
                                      double phase_elapsed_ms,
                                      double phase_duration_ms,
-                                     bool running) {
+                                     bool running,
+                                     double measured_window_ops_per_sec = -1.0) {
     std::lock_guard<std::mutex> lock(g_workload_snapshot_mutex);
+    double elapsed_ms = g_workload_start_ms > 0.0 ? now_ms() - g_workload_start_ms : 0.0;
+    double window_ops_per_sec = measured_window_ops_per_sec;
+    if (window_ops_per_sec < 0.0 &&
+        elapsed_ms > g_workload_snapshot.elapsed_ms &&
+        ops >= g_workload_snapshot.ops &&
+        g_workload_snapshot.elapsed_ms > 0.0) {
+        double delta_ms = elapsed_ms - g_workload_snapshot.elapsed_ms;
+        uint64_t delta_ops = ops - g_workload_snapshot.ops;
+        window_ops_per_sec = delta_ms > 0.0
+            ? static_cast<double>(delta_ops) / (delta_ms / 1000.0)
+            : 0.0;
+    }
     std::snprintf(g_workload_snapshot.phase, sizeof(g_workload_snapshot.phase), "%s", phase);
     g_workload_snapshot.phase_index = phase_index;
     g_workload_snapshot.phase_count = phase_count;
@@ -152,13 +217,17 @@ static void update_workload_snapshot(const char* phase,
     g_workload_snapshot.peak_live_bytes = peak_live_bytes;
     g_workload_snapshot.validation_checks = validation_checks;
     g_workload_snapshot.validation_errors = validation_errors;
-    g_workload_snapshot.elapsed_ms = g_workload_start_ms > 0.0 ? now_ms() - g_workload_start_ms : 0.0;
+    g_workload_snapshot.elapsed_ms = elapsed_ms;
+    g_workload_snapshot.window_ops_per_sec = window_ops_per_sec;
     g_workload_snapshot.phase_elapsed_ms = phase_elapsed_ms;
     g_workload_snapshot.phase_duration_ms = phase_duration_ms;
     g_workload_snapshot.phase_progress = phase_duration_ms > 0.0
         ? std::min(1.0, phase_elapsed_ms / phase_duration_ms)
         : 0.0;
     g_workload_snapshot.running = running;
+    if (measured_window_ops_per_sec >= 0.0) {
+        maybe_record_trace_point(phase_index, g_workload_snapshot.phase_progress, window_ops_per_sec);
+    }
 }
 
 static WorkloadSnapshot workload_snapshot_copy() {
@@ -218,6 +287,7 @@ static std::string telemetry_snapshot_json() {
        << ",\"elapsed_ms\":" << w.elapsed_ms
        << ",\"ops\":" << w.ops
        << ",\"ops_per_sec\":" << ops_sec
+       << ",\"window_ops_per_sec\":" << w.window_ops_per_sec
        << ",\"allocs\":" << w.allocs
        << ",\"frees\":" << w.frees
        << ",\"reallocs\":" << w.reallocs
@@ -312,6 +382,32 @@ static std::string telemetry_snapshot_json() {
         os << "]";
     }
     os << "}";
+    return os.str();
+}
+
+static std::string telemetry_comparison_json() {
+    std::lock_guard<std::mutex> lock(g_comparison_mutex);
+    std::ostringstream os;
+    os << "{\"enabled\":" << (g_comparison_enabled ? "true" : "false")
+       << ",\"ready\":" << (g_comparison_ready ? "true" : "false")
+       << ",\"status\":\"" << g_comparison_status << "\""
+       << ",\"modes\":[";
+    for (size_t i = 0; i < g_comparison_traces.size(); ++i) {
+        const ModeComparisonTrace& trace = g_comparison_traces[i];
+        if (i) os << ",";
+        os << "{\"mode\":\"" << trace.mode << "\",\"points\":[";
+        for (size_t j = 0; j < trace.points.size(); ++j) {
+            const ThroughputTracePoint& p = trace.points[j];
+            if (j) os << ",";
+            os << "{\"phase_index\":" << p.phase_index
+               << ",\"phase_bucket\":" << p.phase_bucket
+               << ",\"phase_progress\":" << p.phase_progress
+               << ",\"ops_per_sec\":" << p.ops_per_sec
+               << "}";
+        }
+        os << "]}";
+    }
+    os << "]}";
     return os.str();
 }
 
@@ -796,12 +892,13 @@ static void publish_generated(const GeneratedPhase& phase,
                               const GeneratedMetrics& m,
                               double phase_elapsed_ms = 0.0,
                               double phase_duration_ms = 0.0,
-                              bool running = true) {
+                              bool running = true,
+                              double measured_window_ops_per_sec = -1.0) {
     update_workload_snapshot(phase.name.c_str(), phase_index, phase_count, m.ops, m.allocs, m.frees,
                              m.reallocs, m.remote_frees, m.requested_bytes, m.live_objects,
                              m.live_bytes, m.peak_live_bytes, m.validation_checks,
                              m.validation_errors, phase_elapsed_ms,
-                             phase_duration_ms, running);
+                             phase_duration_ms, running, measured_window_ops_per_sec);
 }
 
 static void generated_small_churn(const StrategyDescriptor& s,
@@ -1204,11 +1301,16 @@ static void run_generated_realtime(const StrategyDescriptor& s,
                 double elapsed = now_ms() - phase_start;
                 if (elapsed >= phase_ms) break;
                 double tick_start = now_ms();
+                uint64_t before_ops = m.ops;
                 run_realtime_phase_chunk(s, cfg, phase, ops_per_tick, m, state);
                 double after_ops = now_ms();
+                uint64_t tick_ops = m.ops >= before_ops ? m.ops - before_ops : 0;
+                double tick_exec_ms = std::max(0.001, after_ops - tick_start);
+                double tick_ops_per_sec = static_cast<double>(tick_ops) / (tick_exec_ms / 1000.0);
                 double phase_elapsed = after_ops - phase_start;
                 publish_generated(phase, phase_index, phase_count, m,
-                                  phase_elapsed, static_cast<double>(phase_ms), true);
+                                  phase_elapsed, static_cast<double>(phase_ms), true,
+                                  tick_ops_per_sec);
                 double spent = now_ms() - tick_start;
                 double remaining = static_cast<double>(phase_ms) - (now_ms() - phase_start);
                 double sleep_ms = std::min(static_cast<double>(tick_ms) - spent, remaining);
@@ -1686,6 +1788,10 @@ static void print_usage(const char* argv0) {
         "  --telemetry-port N    serve lightweight local workload UI on 127.0.0.1:N\n"
         "  --telemetry-hold-ms N keep telemetry UI alive after benchmarks finish\n"
         "                        when --telemetry-port is enabled (default: 300000; 0 exits immediately)\n"
+        "  --telemetry-compare-modes\n"
+        "                        precompute fixed adaptive-mode TPS references for the Web UI\n"
+        "  --telemetry-compare-phase-ms N\n"
+        "                        reference collection duration per generated phase (default: 600)\n"
         "  --seed N              deterministic RNG seed\n"
         "  --help                show this help\n",
         argv0);
@@ -1798,6 +1904,13 @@ static bool parse_args(int argc, char** argv, BenchConfig& cfg) {
         } else if (std::strcmp(arg, "--telemetry-hold-ms") == 0) {
             const char* v = need_value(arg);
             if (!v || !parse_nonnegative_int_arg(v, cfg.telemetry_hold_ms)) return false;
+        } else if (std::strcmp(arg, "--telemetry-compare-modes") == 0) {
+            cfg.telemetry_compare_modes = true;
+        } else if (std::strcmp(arg, "--telemetry-compare-phase-ms") == 0) {
+            const char* v = need_value(arg);
+            if (!v || !parse_int_arg(v, cfg.telemetry_compare_phase_ms)) return false;
+        } else if (std::strcmp(arg, "--telemetry-trace-stdout") == 0) {
+            cfg.telemetry_trace_stdout = true;
         } else if (std::strcmp(arg, "--repeats") == 0) {
             const char* v = need_value(arg);
             if (!v || !parse_int_arg(v, cfg.repeats)) return false;
@@ -1909,29 +2022,158 @@ static bool run_one(const StrategyDescriptor& s,
     return false;
 }
 
+static bool contains_generated_workload(const std::vector<std::string>& benches) {
+    return std::find(benches.begin(), benches.end(), "generated_workload") != benches.end();
+}
+
+static std::vector<ThroughputTracePoint> parse_trace_stdout(const std::string& text) {
+    std::vector<ThroughputTracePoint> points;
+    std::istringstream input(text);
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.rfind("TRACE\t", 0) != 0) continue;
+        std::istringstream row(line.substr(6));
+        ThroughputTracePoint point{};
+        if (!(row >> point.phase_index >> point.phase_bucket >>
+              point.phase_progress >> point.ops_per_sec)) {
+            continue;
+        }
+        points.push_back(point);
+    }
+    return points;
+}
+
+static std::vector<std::string> reference_child_args(const char* argv0,
+                                                     const BenchConfig& cfg) {
+    std::vector<std::string> args = {
+        argv0,
+        "--strategy", "adaptive",
+        "--bench", "generated_workload",
+        "--workload-template", cfg.workload_template,
+        "--workload-realtime",
+        "--phase-ms", std::to_string(cfg.telemetry_compare_phase_ms),
+        "--target-ops-per-sec", std::to_string(cfg.target_ops_per_sec),
+        "--phase-repeat", std::to_string(cfg.phase_repeat),
+        "--slots", std::to_string(cfg.slots),
+        "--threads", std::to_string(cfg.threads),
+        "--seed", std::to_string(cfg.seed),
+        "--telemetry-trace-stdout",
+    };
+    if (!cfg.workload_config.empty()) {
+        args.emplace_back("--workload-config");
+        args.push_back(cfg.workload_config);
+    }
+    if (cfg.payload_validation) {
+        args.emplace_back("--payload-validation");
+        args.emplace_back("--payload-validation-rate");
+        args.push_back(std::to_string(cfg.payload_validation_rate));
+    }
+    return args;
+}
+
+static bool capture_fixed_mode_reference(const char* argv0,
+                                         const BenchConfig& cfg,
+                                         const char* mode,
+                                         ModeComparisonTrace& out) {
+    int pipefd[2]{};
+    if (pipe(pipefd) != 0) return false;
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return false;
+    }
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        setenv("MY_MALLOC_ADAPTIVE_MODE", mode, 1);
+        setenv("MY_MALLOC_ADAPTIVE_MODE_SELECTOR", "fixed", 1);
+        std::vector<std::string> args = reference_child_args(argv0, cfg);
+        std::vector<char*> raw;
+        raw.reserve(args.size() + 1);
+        for (std::string& arg : args) raw.push_back(arg.data());
+        raw.push_back(nullptr);
+        execvp(raw[0], raw.data());
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    std::string output;
+    char buf[4096];
+    while (true) {
+        ssize_t n = read(pipefd[0], buf, sizeof(buf));
+        if (n <= 0) break;
+        output.append(buf, static_cast<size_t>(n));
+    }
+    close(pipefd[0]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) return false;
+    out.mode = mode;
+    out.points = parse_trace_stdout(output);
+    return !out.points.empty();
+}
+
+static void collect_mode_comparison_traces(const char* argv0,
+                                           const BenchConfig& cfg) {
+    static constexpr const char* kModes[] = {
+        "balanced",
+        "throughput_cache",
+        "deterministic_latency",
+        "compact_rss",
+        "fragmentation_stable",
+        "cross_thread",
+        "large_object",
+        "hardened_debug",
+    };
+    constexpr size_t kModeCount = sizeof(kModes) / sizeof(kModes[0]);
+    {
+        std::lock_guard<std::mutex> lock(g_comparison_mutex);
+        g_comparison_enabled = true;
+        g_comparison_ready = false;
+        g_comparison_status = "collecting";
+        g_comparison_traces.clear();
+    }
+    if (!cfg.json) {
+        std::printf("collecting TPS comparison references (%zu fixed adaptive modes, %d ms/phase)...\n",
+                    kModeCount, cfg.telemetry_compare_phase_ms);
+    }
+    std::vector<ModeComparisonTrace> traces;
+    traces.reserve(kModeCount);
+    for (const char* mode : kModes) {
+        ModeComparisonTrace trace;
+        if (capture_fixed_mode_reference(argv0, cfg, mode, trace)) {
+            traces.push_back(std::move(trace));
+        } else if (!cfg.json) {
+            std::fprintf(stderr, "failed to collect TPS reference for mode '%s'\n", mode);
+        }
+    }
+    std::lock_guard<std::mutex> lock(g_comparison_mutex);
+    g_comparison_traces = std::move(traces);
+    g_comparison_ready = !g_comparison_traces.empty();
+    g_comparison_status = g_comparison_ready ? "ready" : "unavailable";
+}
+
+static void emit_trace_stdout() {
+    for (const ThroughputTracePoint& p : g_local_trace) {
+        std::printf("TRACE\t%d\t%d\t%.6f\t%.6f\n",
+                    p.phase_index, p.phase_bucket, p.phase_progress, p.ops_per_sec);
+    }
+}
+
 int main(int argc, char** argv) {
     BenchConfig cfg;
     if (!parse_args(argc, argv, cfg)) {
         print_usage(argv[0]);
         return 2;
     }
+    g_trace_stdout = cfg.telemetry_trace_stdout;
+    if (g_trace_stdout) trace_reset();
 
     LoadedStrategy loaded;
     if (!load_strategy(cfg.strategy.c_str(), loaded)) return 2;
     if (loaded.desc.vtable.init) loaded.desc.vtable.init();
-
-    TelemetryServer telemetry_server(telemetry_snapshot_json, WEB_VIEWER_DIR);
-    if (cfg.telemetry_port > 0) {
-        set_workload_identity(loaded.desc.name, "idle", cfg.workload_template.c_str());
-        if (!telemetry_server.start(cfg.telemetry_port)) {
-            std::fprintf(stderr, "failed to start telemetry server on 127.0.0.1:%d\n", cfg.telemetry_port);
-            unload_strategy(loaded);
-            return 2;
-        }
-        if (!cfg.json) {
-            std::printf("telemetry UI: http://127.0.0.1:%d/\n", cfg.telemetry_port);
-        }
-    }
 
     std::vector<std::string> benches = cfg.benches.empty() ? profile_benches(cfg.profile) : cfg.benches;
     if (benches.empty()) {
@@ -1939,7 +2181,31 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    if (!cfg.json) {
+    if (cfg.telemetry_compare_modes &&
+        std::strcmp(loaded.desc.name, "adaptive") == 0 &&
+        contains_generated_workload(benches)) {
+        collect_mode_comparison_traces(argv[0], cfg);
+    } else if (cfg.telemetry_compare_modes) {
+        std::lock_guard<std::mutex> lock(g_comparison_mutex);
+        g_comparison_enabled = true;
+        g_comparison_ready = false;
+        g_comparison_status = "requires adaptive generated_workload";
+    }
+
+    TelemetryServer telemetry_server(telemetry_snapshot_json, telemetry_comparison_json, WEB_VIEWER_DIR);
+    if (cfg.telemetry_port > 0) {
+        set_workload_identity(loaded.desc.name, "idle", cfg.workload_template.c_str());
+        if (!telemetry_server.start(cfg.telemetry_port)) {
+            std::fprintf(stderr, "failed to start telemetry server on 127.0.0.1:%d\n", cfg.telemetry_port);
+            unload_strategy(loaded);
+            return 2;
+        }
+        if (!cfg.json && !cfg.telemetry_trace_stdout) {
+            std::printf("telemetry UI: http://127.0.0.1:%d/\n", cfg.telemetry_port);
+        }
+    }
+
+    if (!cfg.json && !cfg.telemetry_trace_stdout) {
         std::printf("=== strategy: %s ===\n", loaded.desc.name);
         std::printf("profile=%s iters=%d random_iters=%d size=%zu range=%zu..%zu slots=%d batch=%d rounds=%d threads=%d repeats=%d seed=%u\n",
                     cfg.profile.c_str(), cfg.iters, cfg.random_iters, cfg.size, cfg.min_size,
@@ -2004,14 +2270,19 @@ int main(int argc, char** argv) {
                             last.name.c_str(), summary.mean, summary.median, summary.p95,
                             summary.stddev, summary.min, summary.max, last.peak_rss_kb);
             }
-        } else if (!cfg.json) {
+        } else if (!cfg.json && !cfg.telemetry_trace_stdout) {
             double ops = ops_values.empty() ? 0.0 : ops_values.front();
             std::printf("  %-16s %10.0f ops/sec  %7.2f ms  peak=%zuKB\n",
                         last.name.c_str(), ops, last.ms, last.peak_rss_kb);
         }
     }
 
-    if (cfg.telemetry_port > 0 && cfg.telemetry_hold_ms > 0 && !cfg.json) {
+    if (cfg.telemetry_trace_stdout) {
+        emit_trace_stdout();
+    }
+
+    if (cfg.telemetry_port > 0 && cfg.telemetry_hold_ms > 0 &&
+        !cfg.json && !cfg.telemetry_trace_stdout) {
         std::printf("telemetry UI remains available for %.1f seconds; press Ctrl+C to stop earlier\n",
                     static_cast<double>(cfg.telemetry_hold_ms) / 1000.0);
         std::fflush(stdout);

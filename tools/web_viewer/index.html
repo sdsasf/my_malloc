@@ -56,6 +56,68 @@
       </article>
     </section>
 
+    <section class="panel comparator-panel">
+      <div class="section-head">
+        <div><div class="eyebrow">mode race telemetry</div><h2>Adaptive TPS Versus Fixed-Mode Oracle</h2></div>
+        <div id="comparisonState" class="system-chip">reference disabled</div>
+      </div>
+      <div class="oracle-grid">
+        <article class="oracle-card">
+          <div class="metric-label">TPS oracle mode</div>
+          <div id="oracleMode" class="oracle-value">n/a</div>
+        </article>
+        <article class="oracle-card">
+          <div class="metric-label">adaptive / oracle</div>
+          <div id="oracleEfficiency" class="oracle-value">n/a</div>
+        </article>
+        <article class="oracle-card">
+          <div class="metric-label">mode alignment</div>
+          <div id="oracleAlignment" class="oracle-value">n/a</div>
+        </article>
+        <article class="oracle-card">
+          <div class="metric-label">TPS gap</div>
+          <div id="oracleGap" class="oracle-value">n/a</div>
+        </article>
+      </div>
+      <div class="comparison-dashboard">
+        <div class="comparison-main">
+          <div class="comparison-chart-wrap">
+            <canvas id="comparisonChart" width="980" height="360"></canvas>
+          </div>
+          <div id="comparisonLegend" class="comparison-legend"></div>
+        </div>
+        <aside class="ranking-panel">
+          <div class="subsection-head">
+            <div>
+              <div class="eyebrow">current window</div>
+              <h3>Mode TPS Ranking</h3>
+            </div>
+            <div id="rankingPhase" class="system-chip">waiting</div>
+          </div>
+          <div id="modeRanking" class="mode-ranking"></div>
+          <div id="rankingFoot" class="ranking-foot">Enable fixed-mode comparison to rank modes.</div>
+        </aside>
+      </div>
+      <div class="alignment-wrap">
+        <div class="alignment-labels"><span>TPS oracle</span><span>adaptive mode</span></div>
+        <div id="oracleModeStrip" class="mode-strip"></div>
+        <div id="adaptiveModeStrip" class="mode-strip"></div>
+      </div>
+      <section class="heatmap-panel">
+        <div class="subsection-head">
+          <div>
+            <div class="eyebrow">phase efficiency</div>
+            <h3>Mode Heatmap Against TPS Oracle</h3>
+          </div>
+          <div class="heatmap-note">brighter cells stay closer to the best fixed mode</div>
+        </div>
+        <div class="heatmap-scroll">
+          <div id="modeHeatmap" class="mode-heatmap"></div>
+        </div>
+      </section>
+      <div id="modeMiniGrid" class="mode-mini-grid"></div>
+    </section>
+
     <section class="panel internal-panel">
       <div class="section-head">
         <div><div class="eyebrow">allocator internals</div><h2>Shared Substrate Map</h2></div>

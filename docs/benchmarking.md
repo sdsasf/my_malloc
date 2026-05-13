@@ -127,6 +127,8 @@ Examples:
 | `--payload-validation-rate N` | Check one generated allocation every N operations |
 | `--telemetry-port N` | Optional local web UI and `/snapshot` endpoint on `127.0.0.1:N` |
 | `--telemetry-hold-ms N` | Keep the local telemetry UI alive after a non-JSON run finishes; default is 300000 ms when a telemetry port is enabled |
+| `--telemetry-compare-modes` | Precompute isolated fixed adaptive-mode TPS traces for the Web comparison dashboard |
+| `--telemetry-compare-phase-ms N` | Duration per generated phase during fixed-mode TPS reference collection; default `600` ms |
 | `--repeats N` | Repeat each benchmark and output aggregate statistics |
 | `--seed N` | Deterministic random seed |
 | `--json` | Emit JSON lines |
@@ -200,6 +202,12 @@ includes selector event fields such as `selector_backend`, `model_candidate`,
 `model_confidence`, and legacy `rule_candidate` for explicit rule-baseline
 runs. The Web UI renders
 these from the selector ring buffer instead of re-extracting workload features.
+With `--telemetry-compare-modes`, `/comparison` exposes fixed adaptive-mode TPS
+traces gathered in isolated child runs. The Web UI overlays those references
+with the live adaptive TPS line and a throughput-only TPS oracle, then derives
+a current-window mode ranking, oracle/adaptive mode strips, a phase-by-mode
+efficiency heatmap, and per-mode small multiples without putting comparator
+work on the allocator hot path.
 The offline model can be regenerated with:
 
 ```bash

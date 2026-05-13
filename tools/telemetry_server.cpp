@@ -11,8 +11,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-TelemetryServer::TelemetryServer(SnapshotFn snapshot_fn, std::string static_root)
-    : snapshot_fn_(snapshot_fn), static_root_(std::move(static_root)) {}
+TelemetryServer::TelemetryServer(SnapshotFn snapshot_fn,
+                                 SnapshotFn comparison_fn,
+                                 std::string static_root)
+    : snapshot_fn_(snapshot_fn),
+      comparison_fn_(comparison_fn),
+      static_root_(std::move(static_root)) {}
 
 TelemetryServer::~TelemetryServer() { stop(); }
 
@@ -75,6 +79,7 @@ void TelemetryServer::handle_client(int client) {
     }
     if (req.empty()) return;
     bool snapshot = req.compare(0, 13, "GET /snapshot") == 0;
+    bool comparison = req.compare(0, 15, "GET /comparison") == 0;
     bool favicon = req.compare(0, 16, "GET /favicon.ico") == 0;
     if (favicon) {
         const char* response =
@@ -88,6 +93,9 @@ void TelemetryServer::handle_client(int client) {
     const char* status_text = "OK";
     if (snapshot) {
         body = snapshot_fn_();
+        type = "application/json";
+    } else if (comparison) {
+        body = comparison_fn_ ? comparison_fn_() : "{\"enabled\":false}";
         type = "application/json";
     } else {
         const char* path = "index.html";

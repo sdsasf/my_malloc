@@ -28,6 +28,24 @@ Without `--workload-realtime`, generated workloads run as fast benchmarks and
 may finish before the browser shows useful phase changes. Use realtime mode for
 watching dynamic behavior.
 
+To compare live adaptive TPS with fixed adaptive modes, enable the opt-in
+reference pass:
+
+```bash
+./build/bench_runner --strategy adaptive --bench generated_workload \
+  --workload-template adaptive_mix \
+  --workload-realtime --phase-ms 10000 --target-ops-per-sec 50000 \
+  --telemetry-port 8080 \
+  --telemetry-compare-modes --telemetry-compare-phase-ms 600
+```
+
+Before the Web server starts, `bench_runner` launches isolated child processes
+for all eight fixed adaptive modes using the same generated workload template,
+seed, slots, threads, and target operation rate. Those fixed-mode traces are
+normalized by phase progress and become the TPS comparison reference.
+`--telemetry-compare-phase-ms` controls how long each reference phase runs; use
+a larger value when a slower but stricter reference is needed.
+
 When `--telemetry-port` is enabled and output is not JSON, `bench_runner` keeps
 the local UI server alive for five minutes after the workload finishes. This
 prevents the browser from showing "connection refused" immediately after a short
@@ -49,6 +67,20 @@ purge/unmap activity, debug/quarantine safety signals, and the selector
 telemetry loop. Adaptive selector decisions are read from the selector event
 ring buffer. The Web snapshot does not call workload feature extraction; it
 only renders events already recorded at selector window boundaries.
+
+When the comparison reference is enabled, the UI adds a TPS comparison view:
+
+- a focused `adaptive vs TPS oracle` main chart;
+- one colored fixed-mode reference trace for the current active mode;
+- oracle mode, adaptive/oracle TPS ratio, alignment, and TPS-gap cards;
+- a current-window ranking of all fixed adaptive modes;
+- oracle-versus-adaptive mode strips;
+- a phase-by-mode efficiency heatmap against the TPS oracle;
+- fixed-mode small multiples for detailed per-mode trace inspection.
+
+This oracle is throughput-only. The learned selector model can intentionally
+diverge when its broader memory, slow-path, or safety cost is better than the
+highest instantaneous TPS.
 
 The page uses a SpaceX-style black/white telemetry dashboard treatment: high
 contrast text, thin borders, compact status pills, a phase progress track,
@@ -106,6 +138,8 @@ Visualization is tool-side only.
   the viewer.
 - Snapshot reads use existing benchmark counters plus adaptive relaxed-atomic
   snapshots when the selected strategy is `adaptive`.
+- Fixed-mode TPS comparison traces run only when `--telemetry-compare-modes`
+  is passed. They are collected before the visible live run in child processes.
 
 This keeps allocator behavior comparable with and without visualization. The
 viewer is intended for human inspection of changing phases and adaptive mode
@@ -119,6 +153,7 @@ switching, not for high-precision performance measurement.
 | `/app.css` | Static viewer stylesheet |
 | `/app.js` | Static viewer script |
 | `/snapshot` | JSON snapshot for the current workload and optional adaptive telemetry |
+| `/comparison` | Optional fixed adaptive-mode TPS reference traces |
 
 The server binds only to `127.0.0.1`.
 
@@ -140,6 +175,7 @@ The server binds only to `127.0.0.1`.
     "phase_duration_ms": 10000,
     "phase_progress": 0.42,
     "ops_per_sec": 250000,
+    "window_ops_per_sec": 281000,
     "allocs": 10000,
     "frees": 9800,
     "reallocs": 5000,
@@ -206,3 +242,27 @@ The server binds only to `127.0.0.1`.
 The `adaptive` object is omitted for non-adaptive strategies. In this payload,
 `large_bytes_ratio` means the fraction of requested bytes in the true
 streaming-large request buckets above 256 KiB.
+
+With `--telemetry-compare-modes`, `/comparison` returns a static payload such
+as:
+
+```json
+{
+  "enabled": true,
+  "ready": true,
+  "status": "ready",
+  "modes": [
+    {
+      "mode": "throughput_cache",
+      "points": [
+        {
+          "phase_index": 0,
+          "phase_bucket": 4,
+          "phase_progress": 0.2,
+          "ops_per_sec": 918000
+        }
+      ]
+    }
+  ]
+}
+```
