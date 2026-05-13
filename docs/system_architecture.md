@@ -120,6 +120,8 @@ Every allocator must identify its own pointers on `free`, `realloc`, and `malloc
 ## Adaptive Backend
 
 Detailed design: [adaptive_allocator.md](adaptive_allocator.md).
+Paper-style diagrams for both the reproduced allocator lab and the adaptive
+backend: [architecture_diagrams.md](architecture_diagrams.md).
 
 Summary:
 
@@ -145,6 +147,7 @@ Benchmark results are learning signals. The teaching allocators intentionally pr
 
 | Document | Scope |
 |---|---|
+| [architecture_diagrams.md](architecture_diagrams.md) | Paper-style architecture figures for the reproduced allocator lab and adaptive allocator |
 | [allocator_lab.md](allocator_lab.md) | Strategy API, validation workflow, plugin workflow, comparison methodology |
 | [benchmarking.md](benchmarking.md) | Benchmark commands, adaptive JSON fields, external benchmark notes |
 | [adaptive_allocator.md](adaptive_allocator.md) | Shared memory layer, mode policy layer, telemetry/selector, soft switching |

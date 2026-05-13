@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="920" viewBox="0 0 1400 920" role="img" aria-labelledby="title desc">
+  <title id="title">tcmalloc-like allocator principle diagram</title>
+  <desc id="desc">Structural diagram showing tcmalloc-like size-class cache hierarchy, central lists, and spans.</desc>
+  <defs>
+    <style>
+      .bg{fill:#fff}.panel{fill:#f8fbfe;stroke:#1f3348;stroke-width:2.4;rx:22}.sub{fill:#fff;stroke:#526a82;stroke-width:2;rx:16}
+      .blue{fill:#e5f0ff;stroke:#1d5fa8}.warm{fill:#fff2dc;stroke:#a86d18}.green{fill:#ecfaef;stroke:#357a46}.gray{fill:#f4f6f8;stroke:#6c7d8f}
+      .title{font:700 36px Arial,sans-serif;fill:#172331}.subtitle{font:500 22px Arial,sans-serif;fill:#536579}
+      .h{font:700 24px Arial,sans-serif;fill:#172331}.t{font:500 18px Arial,sans-serif;fill:#33485d}.s{font:500 16px Arial,sans-serif;fill:#536579}
+      .note{font:700 18px Arial,sans-serif;fill:#1d5fa8}.line{stroke:#9aacbd;stroke-width:2;fill:none}.slot{fill:#e5f0ff;stroke:#1d5fa8;stroke-width:1.6;rx:6}
+    </style>
+  </defs>
+  <rect class="bg" width="1400" height="920"/>
+  <text class="title" x="60" y="62">tcmalloc-like allocator: size-class cache hierarchy</text>
+  <text class="subtitle" x="60" y="98">This is a structure diagram: caches are layered by ownership and refill granularity.</text>
+
+  <rect class="panel" x="60" y="130" width="1280" height="700"/>
+
+  <rect class="sub" x="92" y="180" width="268" height="420"/>
+  <text class="h" x="120" y="220">Size-class table</text>
+  <text class="s" x="120" y="248">uniform teaching classes</text>
+  <g transform="translate(120 286)">
+    <rect class="blue" x="0" y="0" width="70" height="42" rx="8"/><text class="s" x="20" y="27">16B</text>
+    <rect class="blue" x="88" y="0" width="70" height="42" rx="8"/><text class="s" x="108" y="27">32B</text>
+    <rect class="blue" x="0" y="62" width="70" height="42" rx="8"/><text class="s" x="20" y="89">64B</text>
+    <rect class="blue" x="88" y="62" width="70" height="42" rx="8"/><text class="s" x="104" y="89">128</text>
+    <rect class="blue" x="0" y="124" width="158" height="42" rx="8"/><text class="s" x="52" y="151">... 4096B</text>
+  </g>
+  <rect class="warm" x="120" y="506" width="198" height="58" rx="12"/>
+  <text class="t" x="150" y="542">large direct map</text>
+
+  <rect class="sub" x="414" y="180" width="300" height="420"/>
+  <text class="h" x="442" y="220">Thread caches</text>
+  <text class="s" x="442" y="248">one local list per class</text>
+  <g transform="translate(442 292)">
+    <rect class="green" x="0" y="0" width="224" height="56" rx="10"/><text class="t" x="28" y="35">Thread A cache</text>
+    <rect class="green" x="0" y="82" width="224" height="56" rx="10"/><text class="t" x="28" y="117">Thread B cache</text>
+    <rect class="green" x="0" y="164" width="224" height="56" rx="10"/><text class="t" x="28" y="199">Thread C cache</text>
+  </g>
+  <text class="s" x="442" y="548">hot path avoids global locks</text>
+
+  <rect class="sub" x="768" y="180" width="250" height="420"/>
+  <text class="h" x="796" y="220">Central cache</text>
+  <text class="s" x="796" y="248">shared per-class lists</text>
+  <g transform="translate(796 292)">
+    <rect class="blue" x="0" y="0" width="194" height="48" rx="9"/><text class="t" x="28" y="31">Class 16B list</text>
+    <rect class="blue" x="0" y="72" width="194" height="48" rx="9"/><text class="t" x="28" y="103">Class 32B list</text>
+    <rect class="blue" x="0" y="144" width="194" height="48" rx="9"/><text class="t" x="28" y="175">Class ... list</text>
+  </g>
+  <rect class="gray" x="796" y="518" width="194" height="48" rx="9"/>
+  <text class="t" x="824" y="549">batch transfer</text>
+
+  <rect class="sub" x="1072" y="180" width="234" height="420"/>
+  <text class="h" x="1100" y="220">Span backend</text>
+  <text class="s" x="1100" y="248">pages split into objects</text>
+  <rect class="warm" x="1100" y="292" width="178" height="72" rx="12"/><text class="t" x="1132" y="335">64KB span</text>
+  <g transform="translate(1100 408)">
+    <rect class="slot" x="0" y="0" width="34" height="30"/><rect class="slot" x="44" y="0" width="34" height="30"/><rect class="slot" x="88" y="0" width="34" height="30"/>
+    <rect class="slot" x="132" y="0" width="34" height="30"/><rect class="slot" x="0" y="42" width="34" height="30"/><rect class="slot" x="44" y="42" width="34" height="30"/>
+  </g>
+
+  <path class="line" d="M360 390H414"/><path class="line" d="M714 390H768"/><path class="line" d="M1018 390H1072"/>
+  <rect class="panel" x="60" y="860" width="1280" height="44"/>
+  <text class="note" x="92" y="890">Key idea: local caches maximize throughput; central lists and spans amortize refill work.</text>
+</svg>

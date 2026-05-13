@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="980" viewBox="0 0 1400 980" role="img" aria-labelledby="title desc">
+  <title id="title">ptmalloc-style allocator principle diagram</title>
+  <desc id="desc">Structural diagram showing ptmalloc-style tcache, arena bins, chunk metadata, top chunk, and mmap chunks.</desc>
+  <defs>
+    <style>
+      .bg{fill:#fff}.panel{fill:#f8fbfe;stroke:#1f3348;stroke-width:2.4;rx:22}.sub{fill:#fff;stroke:#526a82;stroke-width:2;rx:16}
+      .blue{fill:#e5f0ff;stroke:#1d5fa8}.warm{fill:#fff2dc;stroke:#a86d18}.green{fill:#ecfaef;stroke:#357a46}.gray{fill:#f4f6f8;stroke:#6c7d8f}
+      .title{font:700 36px Arial,sans-serif;fill:#172331}.subtitle{font:500 22px Arial,sans-serif;fill:#536579}
+      .h{font:700 24px Arial,sans-serif;fill:#172331}.t{font:500 18px Arial,sans-serif;fill:#33485d}.s{font:500 16px Arial,sans-serif;fill:#536579}
+      .note{font:700 18px Arial,sans-serif;fill:#1d5fa8}.line{stroke:#9aacbd;stroke-width:2;fill:none}.chunk{fill:#fff;stroke:#1f3348;stroke-width:1.8;rx:6}
+    </style>
+  </defs>
+  <rect class="bg" width="1400" height="980"/>
+  <text class="title" x="60" y="62">ptmalloc-style allocator: bins and boundary-tag heap</text>
+  <text class="subtitle" x="60" y="98">This is a structure diagram: it shows allocator state layout, not the malloc execution path.</text>
+
+  <rect class="panel" x="60" y="130" width="1280" height="700"/>
+
+  <rect class="sub" x="92" y="176" width="286" height="300"/>
+  <text class="h" x="120" y="214">Thread-local tcache</text>
+  <text class="s" x="120" y="242">per-thread singly linked bins</text>
+  <g transform="translate(120 270)">
+    <rect class="blue" x="0" y="0" width="54" height="38" rx="8"/><text class="s" x="14" y="25">16</text>
+    <rect class="blue" x="70" y="0" width="54" height="38" rx="8"/><text class="s" x="84" y="25">32</text>
+    <rect class="blue" x="140" y="0" width="54" height="38" rx="8"/><text class="s" x="154" y="25">48</text>
+    <rect class="blue" x="0" y="56" width="54" height="38" rx="8"/><text class="s" x="10" y="81">...</text>
+    <rect class="blue" x="70" y="56" width="54" height="38" rx="8"/><text class="s" x="82" y="81">1K</text>
+    <rect class="blue" x="140" y="56" width="54" height="38" rx="8"/><text class="s" x="150" y="81">...</text>
+  </g>
+  <text class="t" x="120" y="404">Core principle</text>
+  <text class="s" x="120" y="432">small frees can be cached</text>
+  <text class="s" x="120" y="456">without touching arena locks</text>
+
+  <rect class="sub" x="416" y="176" width="546" height="450"/>
+  <text class="h" x="444" y="214">Arena bin layout</text>
+  <text class="s" x="444" y="242">one arena owns bins, top chunk, and heap segments</text>
+
+  <text class="t" x="444" y="292">Fastbins</text>
+  <g transform="translate(560 266)">
+    <rect class="blue" x="0" y="0" width="44" height="34" rx="7"/><rect class="blue" x="54" y="0" width="44" height="34" rx="7"/>
+    <rect class="blue" x="108" y="0" width="44" height="34" rx="7"/><rect class="blue" x="162" y="0" width="44" height="34" rx="7"/>
+    <rect class="blue" x="216" y="0" width="44" height="34" rx="7"/><text class="s" x="276" y="23">tiny LIFO lists</text>
+  </g>
+
+  <text class="t" x="444" y="356">Unsorted bin</text>
+  <rect class="warm" x="604" y="326" width="250" height="46" rx="10"/>
+  <text class="s" x="628" y="356">recently freed staging bin</text>
+
+  <text class="t" x="444" y="430">Small bins</text>
+  <g transform="translate(604 396)">
+    <rect class="green" x="0" y="0" width="62" height="38" rx="8"/><rect class="green" x="76" y="0" width="62" height="38" rx="8"/>
+    <rect class="green" x="152" y="0" width="62" height="38" rx="8"/><rect class="green" x="228" y="0" width="62" height="38" rx="8"/>
+    <text class="s" x="310" y="25">exact-size FIFO bins</text>
+  </g>
+
+  <text class="t" x="444" y="504">Large bins</text>
+  <g transform="translate(604 470)">
+    <rect class="gray" x="0" y="0" width="62" height="38" rx="8"/><rect class="gray" x="76" y="0" width="62" height="38" rx="8"/>
+    <rect class="gray" x="152" y="0" width="62" height="38" rx="8"/><rect class="gray" x="228" y="0" width="62" height="38" rx="8"/>
+    <text class="s" x="310" y="25">ordered ranges + binmap</text>
+  </g>
+
+  <rect class="warm" x="444" y="550" width="218" height="52" rx="12"/>
+  <text class="t" x="474" y="584">Top chunk</text>
+  <rect class="warm" x="706" y="550" width="218" height="52" rx="12"/>
+  <text class="t" x="736" y="584">mmap chunks</text>
+
+  <rect class="sub" x="1000" y="176" width="306" height="450"/>
+  <text class="h" x="1028" y="214">Chunk metadata</text>
+  <text class="s" x="1028" y="242">boundary tags enable coalescing</text>
+  <g transform="translate(1028 284)">
+    <rect class="chunk" x="0" y="0" width="236" height="54"/><text class="t" x="18" y="34">prev_size</text>
+    <rect class="chunk" x="0" y="70" width="236" height="54"/><text class="t" x="18" y="104">size | flags</text>
+    <rect class="chunk" x="0" y="140" width="236" height="54"/><text class="t" x="18" y="174">fd / bk if free</text>
+    <rect class="chunk blue" x="0" y="236" width="64" height="44"/><text class="s" x="16" y="264">used</text>
+    <rect class="chunk warm" x="76" y="236" width="64" height="44"/><text class="s" x="92" y="264">free</text>
+    <rect class="chunk warm" x="152" y="236" width="64" height="44"/><text class="s" x="168" y="264">free</text>
+  </g>
+  <text class="s" x="1028" y="590">Adjacent free chunks can merge</text>
+
+  <path class="line" d="M378 326H416"/><path class="line" d="M962 404H1000"/>
+
+  <rect class="panel" x="60" y="860" width="1280" height="72"/>
+  <text class="note" x="92" y="904">Key idea: bins organize reusable free chunks; boundary tags make coalescing possible.</text>
+</svg>

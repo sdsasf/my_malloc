@@ -66,6 +66,8 @@ flowchart TB
 Public allocation calls still use one API surface. `MY_MALLOC_MODE` chooses the allocator backend. Inside the `adaptive` backend, new allocations use the active `AdaptiveMode`, while `free`/`realloc`/`usable_size` route by allocation-time metadata so objects return through the mode that created them.
 
 For the detailed system architecture, read [docs/system_architecture.md](docs/system_architecture.md).
+For paper-style architecture figures of the reproduced allocators and adaptive
+allocator, read [docs/architecture_diagrams.md](docs/architecture_diagrams.md).
 
 ## Build
 
@@ -263,6 +265,7 @@ Full benchmark instructions and current results:
 | Document | Read this for |
 |---|---|
 | [docs/system_architecture.md](docs/system_architecture.md) | Project architecture: teaching allocator lab, independent adaptive allocator, ownership, validation, and benchmark harness |
+| [docs/architecture_diagrams.md](docs/architecture_diagrams.md) | Paper-style architecture figures for the reproduced allocator lab and the adaptive allocator |
 | [docs/ptmalloc_design.md](docs/ptmalloc_design.md) | ptmalloc-style allocator: chunk/tcache/bin/arena implementation and simplifications |
 | [docs/tcmalloc_design.md](docs/tcmalloc_design.md) | tcmalloc-like allocator: size classes, thread cache, central lists, spans |
 | [docs/jemalloc_design.md](docs/jemalloc_design.md) | jemalloc-like allocator: arenas, runs, tcache |

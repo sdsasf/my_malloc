@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="760" viewBox="0 0 1400 760" role="img" aria-labelledby="title desc">
+  <title id="title">Hybrid strategy principle diagram</title>
+  <desc id="desc">Structural diagram showing the project-specific hybrid strategy with a slab frontend and ptmalloc fallback.</desc>
+  <defs>
+    <style>
+      .bg{fill:#fff}.panel{fill:#f8fbfe;stroke:#1f3348;stroke-width:2.4;rx:22}.sub{fill:#fff;stroke:#526a82;stroke-width:2;rx:16}
+      .blue{fill:#e5f0ff;stroke:#1d5fa8}.warm{fill:#fff2dc;stroke:#a86d18}.green{fill:#ecfaef;stroke:#357a46}
+      .title{font:700 36px Arial,sans-serif;fill:#172331}.subtitle{font:500 22px Arial,sans-serif;fill:#536579}
+      .h{font:700 24px Arial,sans-serif;fill:#172331}.t{font:500 18px Arial,sans-serif;fill:#33485d}.s{font:500 16px Arial,sans-serif;fill:#536579}
+      .note{font:700 18px Arial,sans-serif;fill:#1d5fa8}.line{stroke:#9aacbd;stroke-width:2;fill:none}
+    </style>
+  </defs>
+  <rect class="bg" width="1400" height="760"/>
+  <text class="title" x="60" y="62">Project hybrid strategy: slab frontend and fallback arena</text>
+  <text class="subtitle" x="60" y="98">This is a project comparison structure, not an industrial allocator family.</text>
+
+  <rect class="panel" x="60" y="130" width="1280" height="500"/>
+  <rect class="sub" x="92" y="190" width="300" height="300"/>
+  <text class="h" x="120" y="230">Routing boundary</text>
+  <rect class="blue" x="120" y="284" width="220" height="62" rx="12"/><text class="t" x="150" y="322">small object</text>
+  <rect class="warm" x="120" y="386" width="220" height="62" rx="12"/><text class="t" x="150" y="424">fallback object</text>
+
+  <rect class="sub" x="460" y="190" width="340" height="300"/>
+  <text class="h" x="488" y="230">Slab frontend</text>
+  <text class="s" x="488" y="258">small fixed-size slots</text>
+  <rect class="green" x="488" y="304" width="86" height="48" rx="8"/><text class="s" x="512" y="334">16B</text>
+  <rect class="green" x="594" y="304" width="86" height="48" rx="8"/><text class="s" x="618" y="334">32B</text>
+  <rect class="green" x="700" y="304" width="70" height="48" rx="8"/><text class="s" x="716" y="334">...</text>
+  <text class="s" x="488" y="410">cached slabs improve tiny-object tests</text>
+
+  <rect class="sub" x="868" y="190" width="390" height="300"/>
+  <text class="h" x="896" y="230">ptmalloc-style fallback</text>
+  <rect class="blue" x="896" y="284" width="150" height="58" rx="12"/><text class="t" x="924" y="320">chunks</text>
+  <rect class="blue" x="1074" y="284" width="150" height="58" rx="12"/><text class="t" x="1102" y="320">bins</text>
+  <rect class="warm" x="896" y="386" width="328" height="58" rx="12"/><text class="t" x="924" y="422">large requests use direct mmap</text>
+
+  <path class="line" d="M392 318H460"/><path class="line" d="M392 420H868"/>
+
+  <rect class="panel" x="60" y="670" width="1280" height="44"/>
+  <text class="note" x="92" y="700">Key idea: a small-object frontend is compared against reproduced allocator families under the same harness.</text>
+</svg>
