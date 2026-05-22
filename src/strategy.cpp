@@ -1,9 +1,7 @@
-// Built-in strategy descriptors.
+// Built-in strategy descriptors: adaptive and libc baseline.
 
 #include "my_ptmalloc/strategy.h"
-#include "my_ptmalloc/my_malloc.h"
 #include "my_ptmalloc/adaptive_allocator.h"
-#include "my_ptmalloc/allocator_lab.h"
 
 #include <cstdlib>
 
@@ -18,34 +16,8 @@ StrategyStats empty_stats() noexcept {
 void noop_init() noexcept {}
 void noop_shutdown() noexcept {}
 
-void hybrid_init() noexcept {
-    allocator_lab_force_mode(AllocMode::Hybrid);
-    my_malloc_init();
-}
-
-void ptmalloc_init() noexcept {
-    allocator_lab_force_mode(AllocMode::PtmallocOnly);
-    my_malloc_init();
-}
-
-void tcmalloc_like_init() noexcept {
-    allocator_lab_force_mode(AllocMode::TcmallocLike);
-    my_malloc_init();
-}
-
-void jemalloc_like_init() noexcept {
-    allocator_lab_force_mode(AllocMode::JemallocLike);
-    my_malloc_init();
-}
-
-void mimalloc_like_init() noexcept {
-    allocator_lab_force_mode(AllocMode::MimallocLike);
-    my_malloc_init();
-}
-
 void adaptive_init() noexcept {
-    allocator_lab_force_mode(AllocMode::Adaptive);
-    my_malloc_init();
+    // Adaptive allocator initializes on first use via its own init path.
 }
 
 void* libc_malloc_wrap(size_t size) noexcept {
@@ -74,102 +46,7 @@ StrategyStats adaptive_stats_wrap() noexcept {
     };
 }
 
-StrategyStats lab_stats_wrap() noexcept {
-    AllocStatsSnapshot s = my_malloc_stats_snapshot();
-    return StrategyStats{
-        s.malloc_calls,
-        s.free_calls,
-        s.realloc_calls,
-        0,
-    };
-}
-
 } // namespace
-
-StrategyDescriptor hybrid_strategy_descriptor() noexcept {
-    return StrategyDescriptor{
-        STRATEGY_API_VERSION,
-        "hybrid",
-        "Small-object slab frontend with ptmalloc-style fallback",
-        StrategyVTable{
-            hybrid_init,
-            noop_shutdown,
-            my_malloc,
-            my_free,
-            my_realloc,
-            my_malloc_usable_size,
-            lab_stats_wrap,
-        },
-    };
-}
-
-StrategyDescriptor ptmalloc_strategy_descriptor() noexcept {
-    return StrategyDescriptor{
-        STRATEGY_API_VERSION,
-        "ptmalloc",
-        "Chunk/bin/arena backend with slab frontend disabled",
-        StrategyVTable{
-            ptmalloc_init,
-            noop_shutdown,
-            my_malloc,
-            my_free,
-            my_realloc,
-            my_malloc_usable_size,
-            adaptive_stats_wrap,
-        },
-    };
-}
-
-StrategyDescriptor tcmalloc_like_strategy_descriptor() noexcept {
-    return StrategyDescriptor{
-        STRATEGY_API_VERSION,
-        "tcmalloc_like",
-        "Teaching size-class allocator with thread caches, central free lists, and 64KB spans",
-        StrategyVTable{
-            tcmalloc_like_init,
-            noop_shutdown,
-            my_malloc,
-            my_free,
-            my_realloc,
-            my_malloc_usable_size,
-            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
-        },
-    };
-}
-
-StrategyDescriptor jemalloc_like_strategy_descriptor() noexcept {
-    return StrategyDescriptor{
-        STRATEGY_API_VERSION,
-        "jemalloc_like",
-        "Teaching arena/run allocator with per-thread tcache and arena-local non-full runs",
-        StrategyVTable{
-            jemalloc_like_init,
-            noop_shutdown,
-            my_malloc,
-            my_free,
-            my_realloc,
-            my_malloc_usable_size,
-            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
-        },
-    };
-}
-
-StrategyDescriptor mimalloc_like_strategy_descriptor() noexcept {
-    return StrategyDescriptor{
-        STRATEGY_API_VERSION,
-        "mimalloc_like",
-        "Teaching per-thread heap/page allocator with owner remote-free queues",
-        StrategyVTable{
-            mimalloc_like_init,
-            noop_shutdown,
-            my_malloc,
-            my_free,
-            my_realloc,
-            my_malloc_usable_size,
-            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
-        },
-    };
-}
 
 StrategyDescriptor adaptive_strategy_descriptor() noexcept {
     return StrategyDescriptor{
@@ -179,11 +56,11 @@ StrategyDescriptor adaptive_strategy_descriptor() noexcept {
         StrategyVTable{
             adaptive_init,
             noop_shutdown,
-            my_malloc,
-            my_free,
-            my_realloc,
-            my_malloc_usable_size,
-            []() noexcept { return StrategyStats{0, 0, 0, 0}; },
+            adaptive_malloc,
+            adaptive_free,
+            adaptive_realloc,
+            adaptive_usable_size,
+            adaptive_stats_wrap,
         },
     };
 }

@@ -1,5 +1,5 @@
 #pragma once
-// Pluggable allocator strategy API.
+// Pluggable allocator strategy API — shared between adaptive and classic allocators.
 
 #include <cstddef>
 #include <cstdint>
@@ -34,12 +34,14 @@ struct StrategyDescriptor {
 
 using StrategyEntryFn = StrategyDescriptor (*)() noexcept;
 
-StrategyDescriptor hybrid_strategy_descriptor() noexcept;
-StrategyDescriptor ptmalloc_strategy_descriptor() noexcept;
-StrategyDescriptor tcmalloc_like_strategy_descriptor() noexcept;
-StrategyDescriptor jemalloc_like_strategy_descriptor() noexcept;
-StrategyDescriptor mimalloc_like_strategy_descriptor() noexcept;
+// Built-in strategies
 StrategyDescriptor adaptive_strategy_descriptor() noexcept;
 StrategyDescriptor libc_strategy_descriptor() noexcept;
+
+// Classic allocator reproductions (defined in classic/ subdirectories)
+StrategyDescriptor ptmalloc_classic_strategy_descriptor() noexcept;
+StrategyDescriptor tcmalloc_classic_strategy_descriptor() noexcept;
+StrategyDescriptor jemalloc_classic_strategy_descriptor() noexcept;
+StrategyDescriptor mimalloc_classic_strategy_descriptor() noexcept;
 
 } // namespace my_ptmalloc

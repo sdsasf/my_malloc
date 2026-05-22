@@ -14,24 +14,25 @@ struct LoadedStrategy {
 };
 
 inline bool load_strategy(const char* spec, LoadedStrategy& out) {
-    if (!spec || std::strcmp(spec, "hybrid") == 0) {
-        out.desc = hybrid_strategy_descriptor();
-        return true;
-    }
+    if (!spec) spec = "adaptive";
+    // Classic ptmalloc reproduction (standalone)
     if (std::strcmp(spec, "ptmalloc") == 0) {
-        out.desc = ptmalloc_strategy_descriptor();
+        out.desc = ptmalloc_classic_strategy_descriptor();
         return true;
     }
+    // Classic tcmalloc reproduction (standalone)
     if (std::strcmp(spec, "tcmalloc") == 0 || std::strcmp(spec, "tcmalloc_like") == 0) {
-        out.desc = tcmalloc_like_strategy_descriptor();
+        out.desc = tcmalloc_classic_strategy_descriptor();
         return true;
     }
+    // Classic jemalloc reproduction (standalone)
     if (std::strcmp(spec, "jemalloc") == 0 || std::strcmp(spec, "jemalloc_like") == 0) {
-        out.desc = jemalloc_like_strategy_descriptor();
+        out.desc = jemalloc_classic_strategy_descriptor();
         return true;
     }
+    // Classic mimalloc reproduction (standalone)
     if (std::strcmp(spec, "mimalloc") == 0 || std::strcmp(spec, "mimalloc_like") == 0) {
-        out.desc = mimalloc_like_strategy_descriptor();
+        out.desc = mimalloc_classic_strategy_descriptor();
         return true;
     }
     if (std::strcmp(spec, "adaptive") == 0) {
